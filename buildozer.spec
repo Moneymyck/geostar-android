@@ -12,38 +12,38 @@ package.domain = org.geostar
 # (str) Source code where the main.py live
 source.dir = .
 
-# (list) Source files to include (let empty to include all the files)
+# (list) Source files to include
 source.include_exts = py,png,jpg,kv,atlas,json,ttf
 
-# (list) Source files to exclude (let empty to not exclude anything)
+# (list) Source files to exclude
 source.exclude_exts = spec,md,txt
 
-# (list) List of directory to exclude (let empty to not exclude anything)
+# (list) List of directory to exclude
 source.exclude_dirs = tests, bin, venv, .venv, .git, .github, __pycache__, .buildozer
 
-# (str) Application versioning (method 1)
+# (str) Application versioning
 version = 12.25
 
 # (list) Application requirements
-# IMPORTANT : python3==3.11.9 obligatoire car Kivy 2.3.0 ne compile pas avec Python 3.14
-requirements = python3==3.11.9,hostpython3==3.11.9,kivy==2.3.0,pillow,certifi,pyjnius,android
+# Note : on ne pin PAS python3 ici, c'est p4a qui gere la version Python
+requirements = python3,kivy==2.3.0,pillow,certifi,pyjnius,android
 
 # (str) Supported orientation
 orientation = portrait
 
-# (bool) Indicate if the application should be fullscreen or not
+# (bool) Fullscreen
 fullscreen = 0
 
 # (list) Permissions
 android.permissions = INTERNET,WRITE_EXTERNAL_STORAGE,READ_EXTERNAL_STORAGE,RECORD_AUDIO,VIBRATE
 
 # (int) Target Android API
-android.api = 34
+android.api = 33
 
 # (int) Minimum API
 android.minapi = 21
 
-# (int) Android NDK API to use.
+# (int) Android NDK API
 android.ndk_api = 21
 
 # (bool) auto-accept SDK license
@@ -52,19 +52,25 @@ android.accept_sdk_license = True
 # (list) The Android archs to build for
 android.archs = arm64-v8a, armeabi-v7a
 
-# (bool) enables Android auto backup feature
+# (bool) auto backup
 android.allow_backup = True
 
-# (str) The format used to package the app for release mode
+# (str) release format
 android.release_artifact = apk
 
-# (str) The format used to package the app for debug mode
+# (str) debug format
 android.debug_artifact = apk
 
-# (str) python-for-android branch to use
-p4a.branch = master
+#
+# Python for android (p4a) - VERSION CRITIQUE
+#
 
-# (str) Bootstrap to use for android builds
+# IMPORTANT : on epingle p4a a la release 2024.01.21
+# car master utilise Python 3.14 incompatible avec Kivy 2.3.0
+# La release 2024.01.21 utilise Python 3.11 (stable, compatible Kivy 2.3.0)
+p4a.branch = 2024.01.21
+
+# (str) Bootstrap
 p4a.bootstrap = sdl2
 
 
@@ -73,5 +79,5 @@ p4a.bootstrap = sdl2
 # (int) Log level
 log_level = 2
 
-# (int) Display warning if buildozer is run as root
+# (int) Warn on root
 warn_on_root = 1

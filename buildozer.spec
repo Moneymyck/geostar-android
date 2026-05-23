@@ -25,7 +25,7 @@ source.exclude_dirs = tests, bin, venv, .venv, .git, .github, __pycache__, .buil
 version = 12.25
 
 # (list) Application requirements
-# Note : on ne pin PAS python3 ici, c'est p4a qui gere la version Python
+# p4a v2024.01.21 utilise Python 3.11 par defaut, compatible Kivy 2.3.0
 requirements = python3,kivy==2.3.0,pillow,certifi,pyjnius,android
 
 # (str) Supported orientation
@@ -65,10 +65,10 @@ android.debug_artifact = apk
 # Python for android (p4a) - VERSION CRITIQUE
 #
 
-# IMPORTANT : on epingle p4a a la release 2024.01.21
-# car master utilise Python 3.14 incompatible avec Kivy 2.3.0
-# La release 2024.01.21 utilise Python 3.11 (stable, compatible Kivy 2.3.0)
-p4a.branch = 2024.01.21
+# IMPORTANT : tag v2024.01.21 (avec le "v" prefix obligatoire)
+# Cette release p4a utilise Python 3.11, compatible avec Kivy 2.3.0
+# La branche master utilise Python 3.14 qui CASSE Kivy 2.3.0
+p4a.branch = v2024.01.21
 
 # (str) Bootstrap
 p4a.bootstrap = sdl2

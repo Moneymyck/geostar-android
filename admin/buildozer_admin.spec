@@ -1,7 +1,7 @@
 [app]
 title = GEOSTAR Admin
 package.name = geostaradmin
-package.domain = org.geostar
+package.domain = org.geostaradmin
 source.dir = .
 source.include_exts = py,png,jpg,kv,atlas,json,ttf
 source.exclude_exts = spec,md,txt

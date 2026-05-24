@@ -1,0 +1,6048 @@
+
+# ============================================================
+# GEOSTAR V10 - ANDROID / BASE iPHONE
+# ============================================================
+# Android : Pydroid 3 + Kivy
+# iPhone : même logique, mais il faudra empaqueter avec Kivy-iOS
+#          ou créer plus tard une version Swift/Flutter.
+#
+# NOUVEAUTES :
+# - Bouton haut droite = NOTE.
+# - Notes modifiables et supprimables.
+# - Mémo vocal : tentative d'ouverture du micro Android.
+# - Cache permanent : money_cache_solutions.json.
+# - Bouton FIGURE : génère une figure aléatoire parmi les 16.
+# - Couleurs par élément en cas de répétition :
+#   Feu rouge : 1121, 1222, 1122, 1212
+#   Vent gris : 2111, 2122, 2112, 2121
+#   Eau bleu : 1111, 2222, 1112, 2212
+#   Terre vert : 2211, 1221, 1211, 2221
+# - Solutions : clic = menu fermé + thème affiché.
+# - Navigation : glisser gauche/droite pour solution suivante/précédente.
+# - Recherches personnalisées : exemple M8 M7 M3 M9.
+# - Suppression des recherches personnalisées.
+# - Appui long 3 secondes sur figure = déplacement libre.
+# - Clic court sur figure = édition simple 1 / 2 / Q.
+# ============================================================
+
+from kivy.app import App
+from kivy.uix.widget import Widget
+from kivy.uix.floatlayout import FloatLayout
+from kivy.uix.boxlayout import BoxLayout
+from kivy.uix.gridlayout import GridLayout
+from kivy.uix.popup import Popup
+from kivy.uix.label import Label
+from kivy.uix.button import Button
+from kivy.uix.textinput import TextInput
+from kivy.uix.scrollview import ScrollView
+from kivy.graphics import Color, Rectangle, RoundedRectangle, Ellipse, Line
+from kivy.core.window import Window
+from kivy.metrics import dp
+from kivy.clock import Clock
+from kivy.utils import platform
+from datetime import datetime
+import random, json, os, re
+
+NOTES_FILE = "money_notes.json"
+CACHE_FILE = "money_cache_solutions.json"
+CUSTOM_FILE = "money_recherches_perso.json"
+
+FIGURES = {
+    "2222": {"bin": "0000", "africain": "Moussa", "occidental": "Populus", "sens": "Peuple, masse, foule, réception, mouvement collectif."},
+    "2221": {"bin": "0001", "africain": "Youba", "occidental": "Tristitia", "sens": "Tristesse, lourdeur, descente, retard, profondeur."},
+    "2212": {"bin": "0010", "africain": "Idrisse", "occidental": "Albus", "sens": "Clarté, paix, sagesse, purification, parole juste."},
+    "2211": {"bin": "0011", "africain": "Nouhou", "occidental": "Fortuna Major", "sens": "Grande fortune, protection, élévation, réussite solide."},
+    "2122": {"bin": "0100", "africain": "Oumar", "occidental": "Rubeus", "sens": "Feu, passion, conflit, danger, rupture, énergie brute."},
+    "2121": {"bin": "0101", "africain": "Ousman", "occidental": "Acquisitio", "sens": "Gain, acquisition, croissance, récolte, profit."},
+    "2112": {"bin": "0110", "africain": "Badara", "occidental": "Conjunctio", "sens": "Union, rencontre, lien, passage, médiation."},
+    "2111": {"bin": "0111", "africain": "Malidjou", "occidental": "Caput Draconis", "sens": "Début, ouverture, entrée, naissance, nouvelle voie."},
+    "1222": {"bin": "1000", "africain": "Adama", "occidental": "Laetitia", "sens": "Joie, élévation, expansion, satisfaction, ouverture."},
+    "1221": {"bin": "1001", "africain": "Souleymane", "occidental": "Carcer", "sens": "Blocage, limite, prison, concentration, fermeture."},
+    "1212": {"bin": "1010", "africain": "Inzan", "occidental": "Amissio", "sens": "Perte, détachement, abandon, libération, sortie."},
+    "1211": {"bin": "1011", "africain": "Tontigui", "occidental": "Puella", "sens": "Beauté, douceur, harmonie, affection, charme."},
+    "1122": {"bin": "1100", "africain": "Kalalao", "occidental": "Fortuna Minor", "sens": "Petite fortune, chance rapide, opportunité temporaire."},
+    "1121": {"bin": "1101", "africain": "Sedjou", "occidental": "Puer", "sens": "Force, impulsion, courage, combat, énergie active."},
+    "1112": {"bin": "1110", "africain": "Lassana", "occidental": "Cauda Draconis", "sens": "Fin, sortie, queue du dragon, fermeture de cycle."},
+    "1111": {"bin": "1111", "africain": "Ibrahim", "occidental": "Via", "sens": "Route, mouvement, voyage, chemin, transformation."},
+}
+
+BIN_TO_DATA = {v["bin"]: v for v in FIGURES.values()}
+BIN_TO_CODE = {v["bin"]: c for c, v in FIGURES.items()}
+TOUTES_LES_FIGURES = list(FIGURES.keys())
+
+NOM_TO_CODE = {}
+for code, data in FIGURES.items():
+    NOM_TO_CODE[data["africain"].lower().replace(" ", "")] = code
+    NOM_TO_CODE[data["occidental"].lower().replace(" ", "")] = code
+
+NOM_TO_CODE.update({
+    "sedjo": "1121", "sedjou": "1121",
+    "malidjo": "2111", "malidjou": "2111",
+    "lassana": "1112", "lasana": "1112",
+    "kalalao": "1122", "kalala": "1122",
+    "fortunamajor": "2211", "fortunaminor": "1122",
+    "caputdraconis": "2111", "caudadraconis": "1112",
+})
+
+FEU = {"1121", "1222", "1122", "1212"}
+VENT = {"2111", "2122", "2112", "2121"}
+EAU = {"1111", "2222", "1112", "2212"}
+TERRE = {"2211", "1221", "1211", "2221"}
+
+def read_json(path, default):
+    try:
+        if os.path.exists(path):
+            with open(path, "r", encoding="utf-8") as f:
+                return json.load(f)
+    except Exception:
+        pass
+    return default
+
+def write_json(path, data):
+    with open(path, "w", encoding="utf-8") as f:
+        json.dump(data, f, ensure_ascii=False, indent=2)
+
+def normaliser(txt):
+    return txt.strip().lower().replace(" ", "").replace("-", "")
+
+def entree_vers_code(entree):
+    e = normaliser(entree)
+    if len(e) == 4 and all(c in "12" for c in e):
+        return e
+    if e in NOM_TO_CODE:
+        return NOM_TO_CODE[e]
+    raise ValueError("Figure inconnue : utilise 1121 ou Sedjou/Puer.")
+
+def code_vers_bin(code):
+    code = entree_vers_code(code)
+    return "".join("1" if c == "1" else "0" for c in code)
+
+def bin_vers_code(bits):
+    return bits.replace("0", "2")
+
+def data_fig(bits):
+    return BIN_TO_DATA.get(bits, {"africain": "Quantique", "occidental": "Quantum", "sens": "Figure contenant Q."})
+
+def element_of_bits(bits):
+    if bits not in BIN_TO_CODE:
+        return "quantique"
+    code = BIN_TO_CODE[bits]
+    if code in FEU: return "feu"
+    if code in VENT: return "vent"
+    if code in EAU: return "eau"
+    if code in TERRE: return "terre"
+    return "neutre"
+
+def element_color(element):
+    if element == "feu": return (1.0, 0.18, 0.12, 1)
+    if element == "vent": return (0.60, 0.60, 0.60, 1)
+    if element == "eau": return (0.15, 0.42, 1.0, 1)
+    if element == "terre": return (0.20, 0.62, 0.25, 1)
+    if element == "quantique": return (0.65, 0.30, 1.0, 1)
+    return (1, 1, 1, 1)
+
+def xor_bits(a, b):
+    out = ""
+    for x, y in zip(a, b):
+        xx = x if x in "01" else "0"
+        yy = y if y in "01" else "0"
+        out += "1" if xx != yy else "0"
+    return out
+
+def creer_filles(meres):
+    return ["".join(m[i] for m in meres) for i in range(4)]
+
+def developper_theme(m1, m2, m3, m4):
+    meres = [code_vers_bin(m1), code_vers_bin(m2), code_vers_bin(m3), code_vers_bin(m4)]
+    h = {}
+    for i, m in enumerate(meres, 1):
+        h[i] = m
+    filles = creer_filles(meres)
+    for i, f in enumerate(filles, 5):
+        h[i] = f
+    h[9] = xor_bits(h[1], h[2])
+    h[10] = xor_bits(h[3], h[4])
+    h[11] = xor_bits(h[5], h[6])
+    h[12] = xor_bits(h[7], h[8])
+    h[13] = xor_bits(h[9], h[10])
+    h[14] = xor_bits(h[11], h[12])
+    h[15] = xor_bits(h[13], h[14])
+    h[16] = xor_bits(h[1], h[15])
+    return h
+
+def analyser_repetitions(h):
+    rep = {}
+    for i, b in h.items():
+        rep.setdefault(b, []).append(i)
+    return {b: pos for b, pos in rep.items() if len(pos) >= 2}
+
+def analyser_portes(h):
+    defs = {
+        "5-10-16": [5, 10, 16],
+        "3-10-15": [3, 10, 15],
+        "7-13": [7, 13],
+        "7-15": [7, 15],
+        "7-13-15": [7, 13, 15],
+    }
+    out = []
+    for nom, pos in defs.items():
+        vals = [h[p] for p in pos]
+        if all(v == vals[0] for v in vals):
+            out.append((nom, vals[0], pos))
+    return out
+
+def parse_positions(txt):
+    nums = [int(x) for x in re.findall(r"\d+", txt)]
+    nums = [n for n in nums if 1 <= n <= 16]
+    out = []
+    for n in nums:
+        if n not in out:
+            out.append(n)
+    if len(out) < 2:
+        raise ValueError("Il faut au moins deux maisons. Exemple : M8 M7 M3 M9")
+    return out
+
+def search_strict_positions(positions, target_bits=None, rare=False):
+    solutions = []
+    seen = set()
+    for m1 in TOUTES_LES_FIGURES:
+        for m2 in TOUTES_LES_FIGURES:
+            for m3 in TOUTES_LES_FIGURES:
+                for m4 in TOUTES_LES_FIGURES:
+                    h = developper_theme(m1, m2, m3, m4)
+                    vals = [h[p] for p in positions]
+                    if not all(v == vals[0] for v in vals):
+                        continue
+                    fig = vals[0]
+                    if target_bits is not None and fig != target_bits:
+                        continue
+                    exact_pos = [i for i in range(1, 17) if h[i] == fig]
+                    if exact_pos != positions:
+                        continue
+                    secondary = ""
+                    if rare:
+                        if h[7] == h[13] and h[7] != fig:
+                            secondary = "7-13 " + data_fig(h[7])["africain"]
+                        elif h[7] == h[15] and h[7] != fig:
+                            secondary = "7-15 " + data_fig(h[7])["africain"]
+                        else:
+                            continue
+                    key = (m1, m2, m3, m4, tuple(positions), fig, secondary)
+                    if key in seen:
+                        continue
+                    seen.add(key)
+                    solutions.append({"m1": m1, "m2": m2, "m3": m3, "m4": m4, "positions": positions[:], "figure": fig, "secondary": secondary})
+    return solutions
+
+class FigureCard(Widget):
+    def __init__(self, maison=1, bits="0000", root=None, repeated=False, **kwargs):
+        super().__init__(**kwargs)
+        self.maison = maison
+        self.bits = bits
+        self.root = root
+        self.repeated = repeated
+        self.drag_enabled = False
+        self.dx = 0
+        self.dy = 0
+        self.long_event = None
+        self.bind(pos=self.redraw, size=self.redraw)
+
+    def set_bits(self, bits):
+        self.bits = bits
+        self.redraw()
+
+    def enable_drag(self, dt):
+        self.drag_enabled = True
+        self.pos_hint = {}
+        self.size_hint = (None, None)
+        self.size = (self.width, self.height)
+        if self.root:
+            self.root.info.text = "Déplacement activé : glisse la figure."
+
+    def on_touch_down(self, touch):
+        if self.collide_point(*touch.pos):
+            self.drag_enabled = False
+            self.dx = self.x - touch.x
+            self.dy = self.y - touch.y
+            touch.grab(self)
+            self.long_event = Clock.schedule_once(self.enable_drag, 3.0)
+            return True
+        return False
+
+    def on_touch_move(self, touch):
+        if touch.grab_current is self:
+            if self.drag_enabled:
+                self.x = touch.x + self.dx
+                self.y = touch.y + self.dy
+            return True
+        return False
+
+    def on_touch_up(self, touch):
+        if touch.grab_current is self:
+            touch.ungrab(self)
+            if self.long_event:
+                self.long_event.cancel()
+                self.long_event = None
+            if not self.drag_enabled and self.root:
+                self.root.popup_edit_figure(self.maison)
+            self.drag_enabled = False
+            return True
+        return False
+
+    def draw_symbol(self, cx, cy, dot_r, sep, symbol):
+        if symbol == "1":
+            Ellipse(pos=(cx-dot_r, cy-dot_r), size=(dot_r*2, dot_r*2))
+        elif symbol == "0":
+            Ellipse(pos=(cx-sep-dot_r, cy-dot_r), size=(dot_r*2, dot_r*2))
+            Ellipse(pos=(cx+sep-dot_r, cy-dot_r), size=(dot_r*2, dot_r*2))
+        elif symbol == "Q":
+            Line(circle=(cx, cy, dot_r*1.45), width=2)
+            Ellipse(pos=(cx-dot_r*0.35, cy-dot_r*0.35), size=(dot_r*0.7, dot_r*0.7))
+        else:
+            Ellipse(pos=(cx-dot_r, cy-dot_r), size=(dot_r*2, dot_r*2))
+
+    def redraw(self, *args):
+        self.canvas.clear()
+        x, y = self.pos
+        w, h = self.size
+        if w <= 5 or h <= 5:
+            return
+        with self.canvas:
+            if self.repeated:
+                Color(*element_color(element_of_bits(self.bits)))
+            else:
+                Color(1, 1, 1, 1)
+            RoundedRectangle(pos=(x, y), size=(w, h), radius=[dp(5)])
+            Color(0, 0, 0, 1)
+            top = h * 0.17
+            bottom = h * 0.13
+            row_gap = (h - top - bottom) / 4.0
+            dot_r = min(w, h) * 0.055
+            sep = w * 0.18
+            for i, b in enumerate(self.bits):
+                cy = y + h - top - (i+0.5)*row_gap
+                cx = x + w/2
+                self.draw_symbol(cx, cy, dot_r, sep, b)
+            Color(0, 0, 0, 0.25)
+            Line(rounded_rectangle=(x, y, w, h, dp(5)), width=1)
+
+class MoneyRoot(FloatLayout):
+    def __init__(self, **kwargs):
+        super().__init__(**kwargs)
+        Window.clearcolor = (0.02, 0.72, 0.70, 1)
+        self.h = developper_theme("2121", "2111", "1112", "1121")
+        self.mother_codes = ["2121", "2111", "1112", "1121"]
+        self.notes = read_json(NOTES_FILE, [])
+        self.solution_cache = read_json(CACHE_FILE, {})
+        self.custom_searches = read_json(CUSTOM_FILE, [])
+        self.active_solutions = []
+        self.active_solution_index = -1
+        self.active_notes = []
+        self.active_note_index = -1
+        self.cards = {}
+        self.labels = {}
+        self.swipe_start = None
+        self.build_ui()
+        Clock.schedule_once(lambda dt: self.afficher_theme(self.h), 0.2)
+
+
+    def build_ui(self):
+        with self.canvas.before:
+            Color(0.02, 0.72, 0.70, 1)
+            self.bg = Rectangle(pos=self.pos, size=self.size)
+        self.bind(pos=self.update_bg, size=self.update_bg)
+
+        self.title = Label(text="[b]GEOSTAR[/b]\n" + datetime.now().strftime("%d/%m/%Y %H:%M:%S"), markup=True, font_size=dp(20), color=(1,1,1,1), size_hint=(0.76, None), height=dp(70), pos_hint={"x": 0.12, "top": 1})
+        self.add_widget(self.title)
+
+        note_btn = Button(text="NOTE", font_size=dp(13), bold=True, size_hint=(0.12, None), height=dp(50), pos_hint={"x":0.87, "top":0.99})
+        note_btn.bind(on_release=lambda x: self.popup_notes_current())
+        self.add_widget(note_btn)
+
+        # Bouton SAVE theme (a cote de NOTE)
+        save_theme_btn = Button(text="SAVE", font_size=dp(11), bold=True,
+            size_hint=(0.10, None), height=dp(50),
+            pos_hint={"x":0.75, "top":0.99},
+            background_color=(0.1,0.5,0.25,1))
+        def save_current_theme(_):
+            import os as _os
+            SAVED_FILE = _os.path.join(_os.path.expanduser("~"), "geostar_saved_combos.json")
+            ms = getattr(self, "mother_codes", None)
+            if not ms or len(ms) < 4:
+                self.message("Attention","Aucun theme actif.")
+                return
+            saved = read_json(SAVED_FILE, [])
+            theme = developper_theme(*ms)
+            # Detecter la figure principale
+            from collections import Counter
+            all_figs = [theme[i] for i in range(1,17)]
+            fig_bits = Counter(all_figs).most_common(1)[0][0]
+            fig_nom = FIGURES.get(fig_bits, {}).get("africain","?")
+            pos_list = [i for i in range(1,17) if theme[i]==fig_bits]
+            pos_str = "M"+"M".join(str(p) for p in pos_list)
+            entry = {
+                "figure_nom": fig_nom,
+                "figure_bits": fig_bits,
+                "positions_str": pos_str,
+                "mode": "THEME",
+                "m1": ms[0], "m2": ms[1], "m3": ms[2], "m4": ms[3]
+            }
+            if entry not in saved:
+                saved.append(entry)
+                write_json(SAVED_FILE, saved)
+                self.message("Enregistre", "Theme sauvegarde dans COMBINAISONS.\nM1="+ms[0]+" M2="+ms[1]+" M3="+ms[2]+" M4="+ms[3])
+            else:
+                self.message("Deja enregistre","Ce theme est deja dans COMBINAISONS.")
+        save_theme_btn.bind(on_release=save_current_theme)
+        self.add_widget(save_theme_btn)
+
+        notes_list_btn = Button(text="FAVORIS", font_size=dp(11), bold=True, size_hint=(0.13, None), height=dp(50), pos_hint={"x":0.01, "top":0.99}, background_color=(0.55,0.35,0.0,1))
+        notes_list_btn.bind(on_release=lambda x: self.popup_notes_list())
+        self.add_widget(notes_list_btn)
+
+        self.board = FloatLayout(size_hint=(1, 0.73), pos_hint={"x": 0, "y": 0.17})
+        self.board.bind(on_touch_down=self.board_touch_down, on_touch_up=self.board_touch_up)
+        self.add_widget(self.board)
+
+        self.info = Label(text="", font_size=dp(15), bold=True, color=(1,1,1,1), halign="left", valign="middle", size_hint=(1, None), height=dp(65), pos_hint={"x": 0.02, "y": 0.10})
+        self.info.bind(size=lambda inst, val: setattr(inst, "text_size", val))
+        self.add_widget(self.info)
+
+
+
+        # Boutons navigation gauche/droite
+        nav_bar = BoxLayout(orientation="horizontal", spacing=dp(4), size_hint=(0.30, None), height=dp(40), pos_hint={"right":0.99, "y":0.105})
+        btn_prev = Button(text="◀ Préc.", font_size=dp(11), background_color=(0.2,0.2,0.4,1))
+        btn_next = Button(text="Suiv. ▶", font_size=dp(11), background_color=(0.2,0.2,0.4,1))
+        def go_prev(_):
+            notes = getattr(self,"active_notes",[])
+            sols = getattr(self,"active_solutions",[])
+            if notes and getattr(self,"active_note_index",-1) >= 0:
+                self.active_note_index = (self.active_note_index - 1) % len(notes)
+                self.load_note(notes[self.active_note_index])
+            elif sols and self.active_solution_index >= 0:
+                self.solution_previous() if hasattr(self,"solution_previous") else None
+
+        def go_next(_):
+            notes = getattr(self,"active_notes",[])
+            sols = getattr(self,"active_solutions",[])
+            if notes and getattr(self,"active_note_index",-1) >= 0:
+                self.active_note_index = (self.active_note_index + 1) % len(notes)
+                self.load_note(notes[self.active_note_index])
+            elif sols and self.active_solution_index >= 0:
+                self.solution_next() if hasattr(self,"solution_next") else None
+        btn_prev.bind(on_release=go_prev)
+        btn_next.bind(on_release=go_next)
+        nav_bar.add_widget(btn_prev)
+        nav_bar.add_widget(btn_next)
+        self.add_widget(nav_bar)
+
+        bar = BoxLayout(orientation="horizontal", spacing=dp(5), padding=dp(5), size_hint=(1, 0.10), pos_hint={"x": 0, "y": 0})
+        self.add_widget(bar)
+        for txt, fn in [("THEME", self.popup_theme), ("HASARD", self.theme_hasard), ("FIGURE", self.figure_hasard), ("SOLUTIONS", self.popup_solutions), ("TABLE", self.popup_table)]:
+            b = Button(text=txt, bold=True)
+            b.bind(on_release=lambda btn, f=fn: f())
+            bar.add_widget(b)
+
+    def update_bg(self, *args):
+        self.bg.pos = self.pos
+        self.bg.size = self.size
+
+    def board_touch_down(self, instance, touch):
+        self.swipe_start = (touch.x, touch.y)
+        return False
+
+    def board_touch_up(self, instance, touch):
+        if not self.swipe_start:
+            return False
+        sx, sy = self.swipe_start
+        dx = touch.x - sx
+        dy = touch.y - sy
+        if abs(dx) > dp(80) and abs(dx) > abs(dy) * 1.5:
+            if dx < 0:
+                self.solution_next()
+            else:
+                self.solution_previous()
+            return True
+        return False
+
+    def maison_positions(self):
+        return {
+            8:(0.04,0.79,0.10,0.18), 7:(0.16,0.79,0.10,0.18), 6:(0.28,0.79,0.10,0.18), 5:(0.40,0.79,0.10,0.18),
+            4:(0.52,0.79,0.10,0.18), 3:(0.64,0.79,0.10,0.18), 2:(0.76,0.79,0.10,0.18), 1:(0.88,0.79,0.10,0.18),
+            12:(0.10,0.57,0.10,0.18), 11:(0.34,0.57,0.10,0.18), 10:(0.58,0.57,0.10,0.18), 9:(0.82,0.57,0.10,0.18),
+            14:(0.28,0.35,0.10,0.18), 13:(0.68,0.35,0.10,0.18), 15:(0.48,0.18,0.10,0.18), 16:(0.84,0.18,0.10,0.18),
+        }
+
+    def repeated_positions(self):
+        reps = analyser_repetitions(self.h)
+        pos = set()
+        for bits, maisons in reps.items():
+            if len(maisons) >= 2:
+                for m in maisons:
+                    pos.add(m)
+        return pos
+
+    def add_card(self, maison, bits, rx, ry, rw, rh, repeated=False, *args, **kwargs):
+        card = FigureCard(maison=maison, bits=bits, root=self, repeated=repeated, size_hint=(rw, rh), pos_hint={"x":rx, "y":ry})
+        label = Label(text=f"[b]M{maison}[/b]", markup=True, color=(1,0.86,0.05,1), font_size=dp(14), size_hint=(rw,None), height=dp(22), pos_hint={"x":rx, "y":ry+rh})
+        self.board.add_widget(label)
+        self.board.add_widget(card)
+        self.cards[maison] = card
+        self.labels[maison] = label
+
+    def afficher_theme(self, h):
+        self.h = h
+        self.board.clear_widgets()
+        self.cards = {}
+        self.labels = {}
+        repeated = self.repeated_positions()
+        for maison, (rx, ry, rw, rh) in self.maison_positions().items():
+            self.add_card(maison, h[maison], rx, ry, rw, rh, repeated=(maison in repeated))
+        self.title.text = "[b]GEOSTAR[/b]\n" + datetime.now().strftime("%d/%m/%Y %H:%M:%S")
+        self.mettre_infos()
+
+    def mettre_infos(self):
+        portes = analyser_portes(self.h)
+        texte = " | ".join([f"{p[0]}:{data_fig(p[1])['africain']}" for p in portes]) if portes else "Aucune porte"
+        actifs = sum(bits.count("1") for bits in self.h.values())
+        passifs = sum(bits.count("0") for bits in self.h.values())
+        nav = ""
+        if self.active_solutions and self.active_solution_index >= 0:
+            nav = f"\nSolution {self.active_solution_index+1}/{len(self.active_solutions)} — glisse gauche/droite"
+        self.info.text = f"Actifs : {actifs} | Passifs : {passifs}\nPortes : {texte}{nav}"
+
+    def popup_theme(self):
+        box = BoxLayout(orientation="vertical", spacing=dp(6), padding=dp(10))
+        inputs = []
+        for i, ex in enumerate(["Ousman ou 2121", "Malidjou ou 2111", "Lassana ou 1112", "Sedjou ou 1121"]):
+            ti = TextInput(hint_text=f"M{i+1} : {ex}", multiline=False)
+            box.add_widget(ti); inputs.append(ti)
+        btn = Button(text="DEVELOPPER", size_hint=(1,None), height=dp(45)); box.add_widget(btn)
+        pop = Popup(title="Entrer les 4 Mères", content=box, size_hint=(0.92,0.65))
+        def go(_):
+            try:
+                vals = [x.text.strip() for x in inputs]
+                if any(v == "" for v in vals): raise ValueError("Remplis les 4 mères.")
+                self.mother_codes = [entree_vers_code(v) for v in vals]
+                self.clear_active_solutions()
+                self.afficher_theme(developper_theme(*self.mother_codes))
+                pop.dismiss()
+            except Exception as e:
+                self.message("Erreur", str(e))
+        btn.bind(on_release=go); pop.open()
+
+    def theme_hasard(self):
+        """Menu Reduction Binaire : Auto ou Manuel"""
+        box = BoxLayout(orientation="vertical", spacing=dp(10), padding=dp(12))
+        box.add_widget(Label(
+            text="[b]RÉDUCTION BINAIRE[/b]\nMéthode géomantique traditionnelle",
+            markup=True, color=(1,1,1,1),
+            size_hint=(1,None), height=dp(60), halign="center"
+        ))
+        btn_auto = Button(
+            text="AUTOMATIQUE\n16 points aléatoires",
+            size_hint=(1,None), height=dp(65),
+            background_color=(0.1,0.55,0.35,1), font_size=dp(14)
+        )
+        btn_manuel = Button(
+            text="MANUEL\nTape tes propres points",
+            size_hint=(1,None), height=dp(65),
+            background_color=(0.15,0.4,0.7,1), font_size=dp(14)
+        )
+        btn_simple = Button(
+            text="ALÉATOIRE SIMPLE\n(ancienne méthode)",
+            size_hint=(1,None), height=dp(50),
+            background_color=(0.3,0.3,0.3,1), font_size=dp(12)
+        )
+        btn_close = Button(text="ANNULER", size_hint=(1,None), height=dp(42))
+        box.add_widget(btn_auto)
+        box.add_widget(btn_manuel)
+        box.add_widget(btn_simple)
+        box.add_widget(btn_close)
+        pop = Popup(title="Générer un Thème", content=box, size_hint=(0.9,0.6))
+        def do_auto(_):
+            pop.dismiss()
+            self._rb_auto()
+        def do_manuel(_):
+            pop.dismiss()
+            self._rb_manuel()
+        def do_simple(_):
+            pop.dismiss()
+            ms = [random.choice(TOUTES_LES_FIGURES) for _ in range(4)]
+            self.mother_codes = ms
+            self.clear_active_solutions()
+            self.clear_note_zone() if hasattr(self,"clear_note_zone") else None
+            self.afficher_theme(developper_theme(*ms))
+        btn_auto.bind(on_release=do_auto)
+        btn_manuel.bind(on_release=do_manuel)
+        btn_simple.bind(on_release=do_simple)
+        btn_close.bind(on_release=lambda x: pop.dismiss())
+        pop.open()
+
+    def _rb_points_vers_meres(self, points):
+        meres = []
+        for m in range(4):
+            bits = ""
+            for ligne in range(4):
+                n = points[m * 4 + ligne]
+                bits += "1" if (n % 2 == 1) else "2"
+            meres.append(bits)
+        return meres
+
+    def _rb_auto(self):
+        points = [random.randint(1, 9) for _ in range(16)]
+        meres = self._rb_points_vers_meres(points)
+        box = BoxLayout(orientation="vertical", spacing=dp(6), padding=dp(10))
+        txt = "[b]Points générés :[/b]\n"
+        noms = ["Mère 1","Mère 2","Mère 3","Mère 4"]
+        for m in range(4):
+            lignes = points[m*4:(m+1)*4]
+            code = meres[m]
+            nom = FIGURES.get(code, {}).get("africain", "?")
+            occ = FIGURES.get(code, {}).get("occidental", "?")
+            pts_str = "  ".join(f"{p}→{'1' if p%2==1 else '2'}" for p in lignes)
+            txt += f"\n[b]{noms[m]}[/b] = {code} {nom} / {occ}\n{pts_str}\n"
+        sv = ScrollView()
+        lab = Label(text=txt, markup=True, color=(1,1,1,1), size_hint_y=None, halign="left", valign="top")
+        lab.bind(texture_size=lambda i,v: setattr(i,"height",v[1]))
+        lab.bind(width=lambda i,v: setattr(i,"text_size",(v,None)))
+        sv.add_widget(lab)
+        box.add_widget(sv)
+        bb = BoxLayout(orientation="horizontal", size_hint=(1,None), height=dp(44), spacing=dp(4))
+        b_app = Button(text="APPLIQUER", background_color=(0.1,0.6,0.3,1))
+        b_reg = Button(text="REGÉNÉRER")
+        b_ann = Button(text="ANNULER")
+        bb.add_widget(b_app); bb.add_widget(b_reg); bb.add_widget(b_ann)
+        box.add_widget(bb)
+        pop = Popup(title="Réduction Binaire — Auto", content=box, size_hint=(0.97,0.88))
+        def appliquer(_):
+            pop.dismiss()
+            self.mother_codes = meres
+            self.clear_active_solutions()
+            self.afficher_theme(developper_theme(*meres))
+        b_app.bind(on_release=appliquer)
+        b_reg.bind(on_release=lambda x: (pop.dismiss(), self._rb_auto()))
+        b_ann.bind(on_release=lambda x: pop.dismiss())
+        pop.open()
+
+    def _rb_manuel(self):
+        noms = ["Mere 1","Mere 2","Mere 3","Mere 4"]
+        counts = [0] * 16
+        btns = []
+
+        def get_text(i):
+            n = counts[i]
+            if n == 0:
+                return "L" + str(i+1) + "\n[ ]"
+            bit = "1" if n % 2 == 1 else "2"
+            return "L" + str(i+1) + " =" + bit + "\n" + str(n) + "pts"
+
+        def get_color(i):
+            n = counts[i]
+            if n == 0: return (0.2,0.2,0.2,1)
+            return (0.1,0.5,0.2,1) if n % 2 == 1 else (0.55,0.28,0.0,1)
+
+        def tap(i):
+            counts[i] += 1
+            btns[i].text = get_text(i)
+            btns[i].background_color = get_color(i)
+
+        def reset_one(i):
+            counts[i] = 0
+            btns[i].text = get_text(i)
+            btns[i].background_color = get_color(i)
+
+        box = BoxLayout(orientation="vertical", spacing=dp(6), padding=dp(6))
+
+        lbl = Label(
+            text="Appuie pour +1 point  |  Double-appuie pour effacer",
+            color=(0.85,0.85,0.85,1), size_hint=(1,None), height=dp(32),
+            font_size=dp(11), halign="center"
+        )
+        box.add_widget(lbl)
+
+        for m in range(4):
+            box.add_widget(Label(
+                text="[b]" + noms[m] + "[/b]", markup=True,
+                color=(0.3,0.9,0.6,1), size_hint=(1,None), height=dp(24),
+                font_size=dp(12)
+            ))
+            row = GridLayout(cols=4, spacing=dp(5), size_hint=(1,None), height=dp(75))
+            for lg in range(4):
+                i = m * 4 + lg
+                b = Button(
+                    text=get_text(i),
+                    font_size=dp(12),
+                    background_color=get_color(i),
+                    halign="center"
+                )
+                btns.append(b)
+                b.bind(on_touch_down=lambda btn, touch, idx=i: (
+                    tap(idx) if btn.collide_point(*touch.pos) else None
+                ))
+                row.add_widget(b)
+            box.add_widget(row)
+
+        bbar = BoxLayout(orientation="horizontal", size_hint=(1,None), height=dp(44), spacing=dp(4))
+        b_rnd = Button(text="Hasard", background_color=(0.25,0.25,0.5,1))
+        b_clr = Button(text="Effacer", background_color=(0.5,0.1,0.1,1))
+        b_ok  = Button(text="CALCULER", background_color=(0.1,0.5,0.2,1))
+        bbar.add_widget(b_rnd); bbar.add_widget(b_clr); bbar.add_widget(b_ok)
+        box.add_widget(bbar)
+        b_ann = Button(text="ANNULER", size_hint=(1,None), height=dp(40))
+        box.add_widget(b_ann)
+
+        pop = Popup(title="Points — Tactile", content=box, size_hint=(0.97,0.97))
+
+        def do_rnd(_):
+            for i in range(16):
+                counts[i] = random.randint(1,9)
+                btns[i].text = get_text(i)
+                btns[i].background_color = get_color(i)
+
+        def do_clr(_):
+            for i in range(16):
+                counts[i] = 0
+                btns[i].text = get_text(i)
+                btns[i].background_color = get_color(i)
+
+        def calculer(_):
+            if any(c == 0 for c in counts):
+                self.message("Attention","Appuie sur chaque case (au moins 1 fois).")
+                return
+            meres = self._rb_points_vers_meres(counts)
+            pop.dismiss()
+            nms = ["Mere 1","Mere 2","Mere 3","Mere 4"]
+            txt = "[b]Resultat :[/b]\n"
+            for m in range(4):
+                lgs = counts[m*4:(m+1)*4]
+                code = meres[m]
+                nom = FIGURES.get(code,{}).get("africain","?")
+                occ = FIGURES.get(code,{}).get("occidental","?")
+                ps = "  ".join(str(p)+("->1" if p%2==1 else "->2") for p in lgs)
+                txt += "\n[b]" + nms[m] + "[/b] = " + code + " (" + nom + "/" + occ + ")\n" + ps + "\n"
+            rb = BoxLayout(orientation="vertical", spacing=dp(6), padding=dp(8))
+            sv2 = ScrollView()
+            lab = Label(text=txt, markup=True, color=(1,1,1,1), size_hint_y=None, halign="left", valign="top")
+            lab.bind(texture_size=lambda i,v: setattr(i,"height",v[1]))
+            lab.bind(width=lambda i,v: setattr(i,"text_size",(v,None)))
+            sv2.add_widget(lab); rb.add_widget(sv2)
+            bb2 = BoxLayout(orientation="horizontal", size_hint=(1,None), height=dp(44), spacing=dp(4))
+            ba = Button(text="APPLIQUER", background_color=(0.1,0.6,0.3,1))
+            br = Button(text="RETOUR")
+            bb2.add_widget(ba); bb2.add_widget(br); rb.add_widget(bb2)
+            pop2 = Popup(title="Resultat", content=rb, size_hint=(0.97,0.85))
+            def app2(_):
+                pop2.dismiss()
+                self.mother_codes = meres
+                self.clear_active_solutions()
+                self.afficher_theme(developper_theme(*meres))
+            ba.bind(on_release=app2)
+            br.bind(on_release=lambda x: (pop2.dismiss(), self._rb_manuel()))
+            pop2.open()
+
+        b_rnd.bind(on_release=do_rnd)
+        b_clr.bind(on_release=do_clr)
+        b_ok.bind(on_release=calculer)
+        b_ann.bind(on_release=lambda x: pop.dismiss())
+        pop.open()
+
+    def figure_hasard(self):
+        code = random.choice(TOUTES_LES_FIGURES)
+        bits = code_vers_bin(code)
+        d = data_fig(bits)
+        self.message("Figure aléatoire", f"{d['africain']} / {d['occidental']}\nCode : {code}\nÉlément : {element_of_bits(bits)}\n\n{d['sens']}")
+
+    def popup_edit_figure(self, maison):
+        bits = self.h[maison]
+        d = data_fig(bits)
+        box = BoxLayout(orientation="vertical", spacing=dp(6), padding=dp(8))
+        box.add_widget(Label(text=f"Maison {maison}\n{d['africain']} / {d['occidental']}\nClic court = modifier. Appui long 3 secondes = déplacer.\nQ = superposition simple.", color=(1,1,1,1), size_hint=(1,None), height=dp(110)))
+        grid = GridLayout(cols=3, spacing=dp(4), size_hint=(1,None), height=dp(170)); box.add_widget(grid)
+        def mk(line, sym, label):
+            b = Button(text=f"L{line+1}\n{label}")
+            def act(_):
+                self.apply_symbol(maison, line, sym); pop.dismiss()
+            b.bind(on_release=act); return b
+        for line in range(4):
+            grid.add_widget(mk(line, "1", "1 point"))
+            grid.add_widget(mk(line, "0", "2 points"))
+            grid.add_widget(mk(line, "Q", "Q"))
+        close = Button(text="FERMER", size_hint=(1,None), height=dp(42)); box.add_widget(close)
+        pop = Popup(title="Modifier la figure", content=box, size_hint=(0.92,0.75))
+        close.bind(on_release=lambda x: pop.dismiss()); pop.open()
+
+    def apply_symbol(self, maison, line, sym):
+        old = self.h[maison]
+        new = old[:line] + sym + old[line+1:]
+        self.h[maison] = new
+        if maison in self.cards: self.cards[maison].set_bits(new)
+        if maison in [1,2,3,4] and sym in ["1","0"]:
+            mother_bits = [self.h[i] for i in [1,2,3,4]]
+            if all(set(x).issubset(set("01")) for x in mother_bits):
+                self.mother_codes = [bin_vers_code(x) for x in mother_bits]
+                self.clear_active_solutions()
+                self.afficher_theme(developper_theme(*self.mother_codes)); return
+        self.mettre_infos()
+
+    def current_key(self):
+        return "-".join(self.mother_codes)
+
+    def popup_notes_current(self):
+        existing = None
+        for n in self.notes:
+            if n.get("key") == self.current_key():
+                existing = n; break
+        box = BoxLayout(orientation="vertical", spacing=dp(6), padding=dp(8))
+        name = TextInput(hint_text="Nom de la note", multiline=False, text=existing.get("nom", "") if existing else "")
+        note = TextInput(hint_text="Note écrite", multiline=True, text=existing.get("note", "") if existing else "")
+        vocal = TextInput(hint_text="Mémo vocal : nom du fichier ou remarque", multiline=False, text=existing.get("vocal", "") if existing else "")
+        box.add_widget(name); box.add_widget(note); box.add_widget(vocal)
+        btns = BoxLayout(orientation="horizontal", size_hint=(1,None), height=dp(45), spacing=dp(5))
+        save_btn = Button(text="ENREGISTRER"); mic_btn = Button(text="MICRO"); delete_btn = Button(text="SUPPRIMER")
+        btns.add_widget(save_btn); btns.add_widget(mic_btn); btns.add_widget(delete_btn); box.add_widget(btns)
+        pop = Popup(title="NOTE du thème", content=box, size_hint=(0.94,0.78))
+        def save(_):
+            item = {"key": self.current_key(), "date": datetime.now().strftime("%d/%m/%Y %H:%M:%S"), "nom": name.text.strip() or "Note sans nom", "note": note.text.strip(), "vocal": vocal.text.strip(), "meres": self.mother_codes, "maisons": {str(k): v for k, v in self.h.items()}}
+            found = False
+            for i, n in enumerate(self.notes):
+                if n.get("key") == item["key"]:
+                    self.notes[i] = item; found = True; break
+            if not found: self.notes.append(item)
+            write_json(NOTES_FILE, self.notes)
+            pop.dismiss(); self.message("NOTE", "Note enregistrée.")
+        def delete(_):
+            self.notes = [n for n in self.notes if n.get("key") != self.current_key()]
+            write_json(NOTES_FILE, self.notes)
+            pop.dismiss(); self.message("NOTE", "Note supprimée.")
+        save_btn.bind(on_release=save); delete_btn.bind(on_release=delete); mic_btn.bind(on_release=lambda x: self.open_micro())
+        pop.open()
+
+    def open_micro(self):
+        if platform == "android":
+            try:
+                from jnius import autoclass
+                Intent = autoclass("android.content.Intent")
+                MediaStore = autoclass("android.provider.MediaStore")
+                PythonActivity = autoclass("org.kivy.android.PythonActivity")
+                intent = Intent(MediaStore.Audio.Media.RECORD_SOUND_ACTION)
+                PythonActivity.mActivity.startActivity(intent)
+                self.message("Micro", "Le micro Android a été ouvert. Enregistre ton mémo, puis indique son nom dans la note.")
+            except Exception as e:
+                self.message("Micro", "Impossible d'ouvrir le micro automatiquement ici. Utilise l'application Enregistreur vocal puis écris le nom du fichier dans la note.\n\n" + str(e))
+        else:
+            self.message("Micro", "Sur iPhone, le micro devra être branché lors du packaging iOS. Pour l'instant, écris le nom du fichier vocal dans la note.")
+
+    def popup_notes_list(self):
+        box = BoxLayout(orientation="vertical", padding=dp(6), spacing=dp(6))
+        box.add_widget(Label(
+            text="Favoris — " + str(len(self.notes)) + " note(s)",
+            color=(1,1,1,1), size_hint=(1,None), height=dp(36)
+        ))
+        sv = ScrollView()
+        grid = GridLayout(cols=1, spacing=dp(4), size_hint_y=None)
+        grid.bind(minimum_height=grid.setter("height"))
+        sv.add_widget(grid)
+        for idx, n in enumerate(self.notes):
+            meres = n.get("meres", ["","","",""])
+            txt = (n.get("nom","Sans nom") + " | " + n.get("date","") +
+                   "\nM1=" + meres[0] + " M2=" + meres[1] +
+                   " M3=" + meres[2] + " M4=" + meres[3])
+            b = Button(text=txt, font_size=dp(11), size_hint_y=None, height=dp(58))
+            def on_note(btn, note=n, i=idx):
+                pop.dismiss()
+                # Activer la navigation notes via boutons Prec/Suiv
+                self.active_notes = self.notes
+                self.active_note_index = i
+                self.load_note(note)
+            b.bind(on_release=on_note)
+            grid.add_widget(b)
+        box.add_widget(sv)
+        close = Button(text="FERMER", size_hint=(1,None), height=dp(42))
+        box.add_widget(close)
+        pop = Popup(title="FAVORIS", content=box, size_hint=(0.95,0.88))
+        close.bind(on_release=lambda x: pop.dismiss())
+        pop.open()
+
+    def load_note(self, note):
+        meres = note.get("meres")
+        if meres and len(meres) == 4:
+            # Afficher le thème du favori visuellement SANS écraser mother_codes.
+            # Ainsi HASARD/THEME/SOLUTIONS restent libres après consultation.
+            self._loading_fav = True
+            self.active_solutions = []
+            self.active_solution_index = -1
+            self.afficher_theme(developper_theme(*meres))
+            self._loading_fav = False
+            self._update_note_zone(note)
+
+    def _update_note_zone(self, note=None):
+        pass  # zone note supprimée
+
+    def clear_active_solutions(self):
+        self.active_solutions = []
+        self.active_solution_index = -1
+        # Quitter aussi le mode navigation favoris
+        self.active_notes = []
+        self.active_note_index = -1
+
+    def clear_note_zone(self):
+        """Appeler quand on charge un theme non-favori."""
+        self.active_notes = []
+        self.active_note_index = -1
+        self._update_note_zone(None)
+
+    def cache_key(self, positions, rare=False):
+        return ("rare_" if rare else "strict_") + "_".join(map(str, positions))
+
+    def get_solutions_cached(self, positions, rare=False):
+        key = self.cache_key(positions, rare)
+        if key in self.solution_cache:
+            return self.solution_cache[key]
+        sols = search_strict_positions(positions, None, rare)
+        self.solution_cache[key] = sols
+        write_json(CACHE_FILE, self.solution_cache)
+        return sols
+
+    def popup_solutions(self):
+        box = BoxLayout(orientation="vertical", spacing=dp(6), padding=dp(8))
+        box.add_widget(Label(text="Solutions intégrées + recherches personnalisées.", color=(1,1,1,1), size_hint=(1,None), height=dp(40)))
+        options = [
+            ("5-10-16 toutes", [5,10,16], False),
+            ("5-10-16 rares 7-13/7-15", [5,10,16], True),
+            ("3-10-15 toutes", [3,10,15], False),
+            ("10-11-15", [10,11,15], False),
+            ("3-11-15", [3,11,15], False),
+            ("2-3-13", [2,3,13], False),
+            ("10-13-15", [10,13,15], False),
+            ("2-10-15", [2,10,15], False),
+        ]
+        for name, pos, rare in options:
+            b = Button(text=name, size_hint=(1,None), height=dp(40))
+            b.bind(on_release=lambda btn, n=name, p=pos, r=rare: self.open_solution_window(n, p, r))
+            box.add_widget(b)
+        add = Button(text="+ AJOUTER RECHERCHE PERSONNALISÉE", size_hint=(1,None), height=dp(42))
+        add.bind(on_release=lambda x: self.popup_add_custom_search()); box.add_widget(add)
+        if self.custom_searches:
+            box.add_widget(Label(text="Recherches perso :", color=(1,1,1,1), size_hint=(1,None), height=dp(28)))
+            for item in self.custom_searches:
+                b = Button(text=f"{item.get('name')} : {item.get('positions')}", size_hint=(1,None), height=dp(38))
+                b.bind(on_release=lambda btn, it=item: self.open_solution_window(it.get("name","Perso"), it.get("positions",[]), False))
+                box.add_widget(b)
+        btn_fig = Button(text="🔍 CHERCHER PAR FIGURE + MAISONS", size_hint=(1,None), height=dp(42), background_color=(0.1,0.6,0.5,1))
+        btn_fig.bind(on_release=lambda x: self.popup_search_by_figure())
+        box.add_widget(btn_fig)
+        manage = Button(text="SUPPRIMER UNE RECHERCHE PERSO", size_hint=(1,None), height=dp(42))
+        manage.bind(on_release=lambda x: self.popup_delete_custom_search()); box.add_widget(manage)
+        Popup(title="SOLUTIONS", content=box, size_hint=(0.94,0.90)).open()
+
+    def open_solution_window(self, title, positions, rare):
+        content = BoxLayout(orientation="vertical", padding=dp(6), spacing=dp(6))
+        header = Label(text=f"{title}\nOuverture...", color=(1,1,1,1), size_hint=(1,None), height=dp(55)); content.add_widget(header)
+        sv = ScrollView(); grid = GridLayout(cols=1, spacing=dp(3), size_hint_y=None); grid.bind(minimum_height=grid.setter("height")); sv.add_widget(grid); content.add_widget(sv)
+        close = Button(text="FERMER", size_hint=(1,None), height=dp(42)); content.add_widget(close)
+        pop = Popup(title=title, content=content, size_hint=(0.98,0.92)); close.bind(on_release=lambda x: pop.dismiss()); pop.open()
+        def fill(dt):
+            try:
+                sols = self.get_solutions_cached(positions, rare)
+                header.text = f"{title}\nTotal : {len(sols)} solution(s)"
+                for idx, sol in enumerate(sols, 1):
+                    fig = data_fig(sol["figure"])["africain"]
+                    sec = (" | " + sol["secondary"]) if sol.get("secondary") else ""
+                    txt = f"{idx}. {fig} {sol['positions']}  M1={sol['m1']} M2={sol['m2']} M3={sol['m3']} M4={sol['m4']}{sec}"
+                    b = Button(text=txt, font_size=dp(10), size_hint_y=None, height=dp(42))
+                    b.bind(on_release=lambda btn, s=sol, sol_list=sols, pp=pop: self.apply_solution_from_list(s, sol_list, pp))
+                    grid.add_widget(b)
+            except Exception as e:
+                header.text = "Erreur"; grid.add_widget(Label(text=str(e), color=(1,1,1,1), size_hint_y=None, height=dp(80)))
+        Clock.schedule_once(fill, 0.1)
+
+    def apply_solution_from_list(self, sol, sol_list, pop=None):
+        if pop: pop.dismiss()
+        self.active_solutions = sol_list
+        try: self.active_solution_index = sol_list.index(sol)
+        except ValueError: self.active_solution_index = 0
+        self.apply_solution(sol)
+
+    def apply_solution(self, sol):
+        # Ferme tous les popups ouverts avant d'afficher le theme
+        from kivy.uix.popup import Popup
+        for widget in list(Popup._popup_stack) if hasattr(Popup, "_popup_stack") else []:
+            try: widget.dismiss()
+            except: pass
+        # Quitter le mode navigation favoris
+        self.active_notes = []
+        self.active_note_index = -1
+        self.mother_codes = [sol["m1"], sol["m2"], sol["m3"], sol["m4"]]
+        self.afficher_theme(developper_theme(*self.mother_codes))
+
+    def solution_next(self):
+        if not self.active_solutions: return
+        self.active_solution_index = (self.active_solution_index + 1) % len(self.active_solutions)
+        self.apply_solution(self.active_solutions[self.active_solution_index])
+
+    def solution_previous(self):
+        if not self.active_solutions: return
+        self.active_solution_index = (self.active_solution_index - 1) % len(self.active_solutions)
+        self.apply_solution(self.active_solutions[self.active_solution_index])
+
+    def popup_add_custom_search(self):
+        box = BoxLayout(orientation="vertical", spacing=dp(6), padding=dp(8))
+        name = TextInput(hint_text="Nom : exemple Retour contact", multiline=False, size_hint=(1,None), height=dp(44))
+        positions = TextInput(hint_text="Maisons : exemple M8 M7 M3 M9 ou 8,7,3,9", multiline=False, size_hint=(1,None), height=dp(44))
+        figure = TextInput(hint_text="Figure facultative : Oumar ou 2122. Vide = toutes", multiline=False, size_hint=(1,None), height=dp(44))
+        box.add_widget(name); box.add_widget(positions); box.add_widget(figure)
+        btn = Button(text="CALCULER ET ENREGISTRER", size_hint=(1,None), height=dp(45)); box.add_widget(btn)
+        pop = Popup(title="Nouvelle recherche personnalisee", content=box, size_hint=(0.95,0.45))
+        def save(_):
+            try:
+                pos = parse_positions(positions.text)
+                fig_text = figure.text.strip()
+                target_code = None
+                if fig_text:
+                    fig_key = fig_text.lower().replace(" ", "")
+                    if fig_text in FIGURES:
+                        target_code = fig_text
+                    elif fig_key in NOM_TO_CODE:
+                        target_code = NOM_TO_CODE[fig_key]
+                    else:
+                        self.message("Erreur", "Figure inconnue : " + fig_text)
+                        return
+                item = {"name": name.text.strip() or "Recherche perso", "positions": pos, "target_code": target_code}
+                if item not in self.custom_searches:
+                    self.custom_searches.append(item); write_json(CUSTOM_FILE, self.custom_searches)
+                pop.dismiss()
+                if target_code:
+                    fig_name = FIGURES[target_code]["africain"]
+                    title = (name.text.strip() or fig_name) + " M" + "+M".join(str(p) for p in sorted(pos))
+                    self.open_search_by_figure_window(title, target_code, sorted(pos))
+                else:
+                    self.open_solution_window(item["name"], pos, False)
+            except Exception as e:
+                self.message("Erreur", str(e))
+        btn.bind(on_release=save); pop.open()
+
+    def popup_delete_custom_search(self):
+        content = BoxLayout(orientation="vertical", padding=dp(6), spacing=dp(6))
+        content.add_widget(Label(text="Choisis une recherche à supprimer.", color=(1,1,1,1), size_hint=(1,None), height=dp(40)))
+        for item in self.custom_searches:
+            b = Button(text=f"{item.get('name')} : {item.get('positions')}", size_hint=(1,None), height=dp(42))
+            b.bind(on_release=lambda btn, it=item: self.delete_custom_search(it))
+            content.add_widget(b)
+        Popup(title="Supprimer recherche", content=content, size_hint=(0.92,0.75)).open()
+
+    def delete_custom_search(self, item):
+        self.custom_searches = [x for x in self.custom_searches if x != item]
+        write_json(CUSTOM_FILE, self.custom_searches)
+        self.message("Recherche", "Recherche supprimée.")
+
+    def popup_search_by_figure(self):
+        from kivy.uix.togglebutton import ToggleButton
+        box = BoxLayout(orientation="vertical", spacing=dp(6), padding=dp(8))
+        box.add_widget(Label(text="1. Choisis la figure :", color=(1,1,1,1), size_hint=(1,None), height=dp(30)))
+        fig_grid = GridLayout(cols=2, spacing=dp(4), size_hint=(1,None))
+        fig_grid.bind(minimum_height=fig_grid.setter("height"))
+        selected_figure = [None]
+        for code, data in FIGURES.items():
+            label = f"{data['africain']} / {data['occidental']}"
+            tb = ToggleButton(text=label, group="figure_choice", size_hint=(1,None), height=dp(38), font_size=dp(11))
+            def on_fig_toggle(btn, c=code):
+                if btn.state == "down":
+                    selected_figure[0] = c
+            tb.bind(on_press=on_fig_toggle)
+            fig_grid.add_widget(tb)
+        sv_fig = ScrollView(size_hint=(1,None), height=dp(180))
+        sv_fig.add_widget(fig_grid)
+        box.add_widget(sv_fig)
+        box.add_widget(Label(text="2. Choisis les maisons :", color=(1,1,1,1), size_hint=(1,None), height=dp(30)))
+        maison_grid = GridLayout(cols=4, spacing=dp(4), size_hint=(1,None), height=dp(160))
+        maison_buttons = {}
+        for i in range(1, 17):
+            tb = ToggleButton(text=f"M{i}", size_hint=(1,None), height=dp(36), font_size=dp(12))
+            maison_buttons[i] = tb
+            maison_grid.add_widget(tb)
+        box.add_widget(maison_grid)
+        # Boutons mode strict / non strict
+        from kivy.uix.togglebutton import ToggleButton as TB2
+        mode_box = BoxLayout(orientation="horizontal", size_hint=(1,None), height=dp(40), spacing=dp(6))
+        btn_strict = TB2(text="STRICTE", group="mode_search", state="down", size_hint=(0.5,1))
+        btn_libre = TB2(text="NON STRICTE", group="mode_search", size_hint=(0.5,1))
+        mode_box.add_widget(btn_strict)
+        mode_box.add_widget(btn_libre)
+        box.add_widget(mode_box)
+
+        btn_calc = Button(text="CALCULER LES SOLUTIONS", size_hint=(1,None), height=dp(45), background_color=(0.1,0.7,0.5,1))
+        box.add_widget(btn_calc)
+        pop = Popup(title="Recherche par figure", content=box, size_hint=(0.97,0.95))
+        self.register_solution_popup(pop)
+        def on_calculer(_):
+            fig_code = selected_figure[0]
+            if fig_code is None:
+                self.message("Attention", "Choisis une figure d'abord.")
+                return
+            positions = sorted([i for i, tb in maison_buttons.items() if tb.state == "down"])
+            if not positions:
+                self.message("Attention", "Choisis au moins une maison.")
+                return
+            stricte = btn_strict.state == "down"
+            pop.dismiss()
+            fig_name = FIGURES[fig_code]["africain"]
+            mode_txt = " [S]" if stricte else " [NS]"
+            title = fig_name + " M" + "+M".join(str(p) for p in positions) + mode_txt
+            self.open_search_by_figure_window(title, fig_code, positions, stricte)
+        btn_calc.bind(on_release=on_calculer)
+        pop.open()
+
+    def open_search_by_figure_window(self, title, fig_code, positions, stricte=False):
+        from kivy.uix.togglebutton import ToggleButton as TBx
+        import os
+        _app_dir = os.path.dirname(os.path.abspath(__file__))
+        import os as _os
+        SAVED_FILE = _os.path.join(_os.path.expanduser("~"), "geostar_saved_combos.json")
+        content = BoxLayout(orientation="vertical", padding=dp(4), spacing=dp(4))
+        header = Label(text=f"{title}\nCalcul en cours...", color=(1,1,1,1), size_hint=(1,None), height=dp(55))
+        content.add_widget(header)
+        # Onglets
+        tab_box = BoxLayout(orientation="horizontal", size_hint=(1,None), height=dp(38), spacing=dp(4))
+        tab_sol = TBx(text="SOLUTIONS", group="v12tabs_fig", state="down", size_hint=(0.5,1))
+        tab_saved = TBx(text="COMBINAISONS", group="v12tabs_fig", size_hint=(0.5,1))
+        tab_box.add_widget(tab_sol); tab_box.add_widget(tab_saved)
+        content.add_widget(tab_box)
+        sv = ScrollView()
+        grid = GridLayout(cols=1, spacing=dp(3), size_hint_y=None)
+        grid.bind(minimum_height=grid.setter("height"))
+        sv.add_widget(grid)
+        sv_saved = ScrollView()
+        grid_saved = GridLayout(cols=1, spacing=dp(3), size_hint_y=None)
+        grid_saved.bind(minimum_height=grid_saved.setter("height"))
+        sv_saved.add_widget(grid_saved)
+        zone = BoxLayout(size_hint=(1,1))
+        zone.add_widget(sv)
+        content.add_widget(zone)
+        btn_box = BoxLayout(orientation="horizontal", size_hint=(1,None), height=dp(42), spacing=dp(4))
+        close = Button(text="FERMER", size_hint=(0.5,1))
+        btn_save = Button(text="💾 ENREGISTRER", size_hint=(0.5,1), background_color=(0.1,0.5,0.3,1))
+        btn_box.add_widget(close); btn_box.add_widget(btn_save)
+        content.add_widget(btn_box)
+        pop = Popup(title=title, content=content, size_hint=(0.98,0.95))
+        self.register_solution_popup(pop)
+        close.bind(on_release=lambda x: pop.dismiss())
+        solutions_ref = []
+        current_sol_ref = [None]
+        def refresh_saved():
+            grid_saved.clear_widgets()
+            saved = read_json(SAVED_FILE, [])
+            if not saved:
+                grid_saved.add_widget(Label(text="Aucune combinaison.", color=(0.7,0.7,0.7,1), size_hint_y=None, height=dp(50)))
+                return
+            for idx, item in enumerate(saved, 1):
+                fig_n = item.get("figure_nom","?")
+                pos_str = item.get("positions_str","")
+                m1,m2,m3,m4 = item.get("m1","?"),item.get("m2","?"),item.get("m3","?"),item.get("m4","?")
+                mode = item.get("mode","")
+                txt = f"{idx}. {fig_n} {pos_str} [{mode}]\n    M1={m1} M2={m2} M3={m3} M4={m4}"
+                row = BoxLayout(orientation="horizontal", size_hint_y=None, height=dp(54), spacing=dp(3))
+                b = Button(text=txt, font_size=dp(9.5), size_hint=(0.75,1), halign="left")
+                b_del = Button(text="✕", size_hint=(0.12,1), background_color=(0.7,0.1,0.1,1))
+                b_app = Button(text="▶", size_hint=(0.13,1), background_color=(0.1,0.4,0.7,1))
+                def on_app(btn, it=item):
+                    pop.dismiss()
+                    sol = {"m1":it["m1"],"m2":it["m2"],"m3":it["m3"],"m4":it["m4"],"figure":it.get("figure_bits","1111"),"positions":[],"secondary":""}
+                    self.apply_solution(sol)
+                def on_del(btn, it=item):
+                    sv2 = read_json(SAVED_FILE, [])
+                    sv2 = [x for x in sv2 if x != it]
+                    write_json(SAVED_FILE, sv2)
+                    refresh_saved()
+                b.bind(on_release=on_app); b_app.bind(on_release=on_app); b_del.bind(on_release=on_del)
+                row.add_widget(b); row.add_widget(b_app); row.add_widget(b_del)
+                grid_saved.add_widget(row)
+        def switch_tab(btn):
+            zone.clear_widgets()
+            if tab_sol.state == "down":
+                zone.add_widget(sv)
+            else:
+                zone.add_widget(sv_saved)
+                refresh_saved()
+        tab_sol.bind(on_press=switch_tab)
+        tab_saved.bind(on_press=switch_tab)
+        def on_save(_):
+            sol = current_sol_ref[0] or (solutions_ref[0] if solutions_ref else None)
+            if sol is None: return
+            saved = read_json(SAVED_FILE, [])
+            fig_bits = code_vers_bin(fig_code)
+            fig_nom = FIGURES[fig_code]["africain"]
+            all_p = sol.get("all_positions", list(positions))
+            pos_str = "M"+"M".join(str(p) for p in all_p)
+            mode = "S" if stricte else "NS"
+            entry = {"figure_nom":fig_nom,"figure_bits":fig_bits,"positions_str":pos_str,"mode":mode,"m1":sol["m1"],"m2":sol["m2"],"m3":sol["m3"],"m4":sol["m4"]}
+            if entry not in saved:
+                saved.append(entry)
+                write_json(SAVED_FILE, saved)
+            self.message("Enregistré", f"{fig_nom} {pos_str} [{mode}]\nM1={sol['m1']} M2={sol['m2']} M3={sol['m3']} M4={sol['m4']}")
+        btn_save.bind(on_release=on_save)
+        pop.open()
+        def fill(dt):
+            try:
+                solutions = []
+                seen = set()
+                fig_bits = code_vers_bin(fig_code)
+                for m1 in TOUTES_LES_FIGURES:
+                    for m2 in TOUTES_LES_FIGURES:
+                        for m3 in TOUTES_LES_FIGURES:
+                            for m4 in TOUTES_LES_FIGURES:
+                                theme = developper_theme(m1, m2, m3, m4)
+                                if not all(theme[p] == fig_bits for p in positions):
+                                    continue
+                                all_pos = [i for i in range(1, 17) if theme[i] == fig_bits]
+                                if stricte and all_pos != list(positions):
+                                    continue
+                                key = (m1, m2, m3, m4)
+                                if key in seen: continue
+                                seen.add(key)
+                                solutions.append({"m1":m1,"m2":m2,"m3":m3,"m4":m4,"positions":list(positions),"figure":fig_bits,"secondary":"","all_positions":all_pos})
+                solutions_ref.clear(); solutions_ref.extend(solutions)
+                mode_lbl = "STRICTE" if stricte else "NON STRICTE"
+                header.text = f"{title}\n{len(solutions)} solution(s) — {mode_lbl}"
+                fig_name = FIGURES[fig_code]["africain"]
+                for idx, sol in enumerate(solutions, 1):
+                    all_p = sol["all_positions"]
+                    pos_ch = set(positions)
+                    pos_sup = [p for p in all_p if p not in pos_ch]
+                    pos_ch_str = "M"+"M".join(str(p) for p in positions)
+                    if stricte:
+                        pos_txt = pos_ch_str
+                        bg = (0.15,0.15,0.15,1)
+                    else:
+                        if pos_sup:
+                            pos_sup_str = "M"+"M".join(str(p) for p in pos_sup)
+                            pos_txt = pos_ch_str + " [+aussi: " + pos_sup_str + "]"
+                            bg = (0.1,0.35,0.55,1)
+                        else:
+                            pos_txt = pos_ch_str + " [exacte]"
+                            bg = (0.15,0.15,0.15,1)
+                    txt = f"{idx}. {fig_name} en {pos_txt}\n    M1={sol['m1']} M2={sol['m2']} M3={sol['m3']} M4={sol['m4']}"
+                    b = Button(text=txt, font_size=dp(10), size_hint_y=None, height=dp(56), halign="left", background_color=bg)
+                    row2 = BoxLayout(orientation="horizontal", size_hint_y=None, height=dp(58), spacing=dp(3))
+                    def on_sol_click(btn, s=sol, sl=solutions):
+                        current_sol_ref[0] = s
+                        # Auto-save si non stricte
+                        if not stricte:
+                            import os as _os
+                            SF = _os.path.join(_os.path.expanduser("~"), "geostar_saved_combos.json")
+                            sv = read_json(SF, [])
+                            fig_bits2 = code_vers_bin(fig_code)
+                            fig_nom2 = FIGURES[fig_code]["africain"]
+                            all_p2 = s.get("all_positions", list(positions))
+                            ps2 = "M"+"M".join(str(p) for p in all_p2)
+                            entry2 = {"figure_nom":fig_nom2,"figure_bits":fig_bits2,
+                                     "positions_str":ps2,"mode":"NS",
+                                     "m1":s["m1"],"m2":s["m2"],"m3":s["m3"],"m4":s["m4"]}
+                            if entry2 not in sv:
+                                sv.append(entry2)
+                                write_json(SF, sv)
+                        self.close_all_solution_popups()
+                        self.apply_solution_from_list(s, sl, None)
+                    b.bind(on_release=on_sol_click)
+                    row2.add_widget(b)
+                    grid.add_widget(row2)
+                if not solutions:
+                    grid.add_widget(Label(text="Aucune solution trouvée.", color=(1,0.4,0.4,1), size_hint_y=None, height=dp(60)))
+            except Exception as e:
+                header.text = "Erreur"
+                grid.add_widget(Label(text=str(e), color=(1,1,1,1), size_hint_y=None, height=dp(80)))
+        Clock.schedule_once(fill, 0.2)
+
+    def popup_table(self):
+        txt = "Éléments :\nFeu rouge : 1121, 1222, 1122, 1212\nVent gris : 2111, 2122, 2112, 2121\nEau bleu : 1111, 2222, 1112, 2212\nTerre vert : 2211, 1221, 1211, 2221\n\n"
+        for code, d in FIGURES.items():
+            bits = code_vers_bin(code)
+            txt += f"{d['africain']} / {d['occidental']} : {code} | {element_of_bits(bits)}\n{d['sens']}\n\n"
+        self.message("Table des 16 figures", txt)
+
+    def message(self, titre_txt, message):
+        content = BoxLayout(orientation="vertical", padding=dp(8), spacing=dp(8))
+        sv = ScrollView()
+        lab = Label(text=message, color=(1,1,1,1), size_hint_y=None, halign="left", valign="top")
+        lab.bind(texture_size=lambda inst, val: setattr(inst, "height", val[1]))
+        lab.bind(width=lambda inst, val: setattr(inst, "text_size", (val, None)))
+        sv.add_widget(lab); content.add_widget(sv)
+        btn = Button(text="OK", size_hint=(1,None), height=dp(45)); content.add_widget(btn)
+        pop = Popup(title=titre_txt, content=content, size_hint=(0.9,0.7))
+        btn.bind(on_release=lambda x: pop.dismiss()); pop.open()
+
+class MoneyApp(App):
+    def build(self):
+        self.title = "GEOSTAR"
+        return MoneyRoot()
+
+
+# ============================================================
+# PATCH V10.1 - FIGURE VISUELLE + RECHERCHE PERSO + MICRO
+# ============================================================
+
+def _money_v101_patch():
+    def figure_hasard_visuelle(self):
+        code = random.choice(TOUTES_LES_FIGURES)
+        bits = code_vers_bin(code)
+        d = data_fig(bits)
+
+        box = BoxLayout(orientation="vertical", spacing=dp(8), padding=dp(10))
+        title = Label(
+            text=f"[b]{d['africain']} / {d['occidental']}[/b]\nCode : {code} | Élément : {element_of_bits(bits)}",
+            markup=True,
+            color=(1,1,1,1),
+            size_hint=(1, None),
+            height=dp(70)
+        )
+        box.add_widget(title)
+
+        zone = FloatLayout(size_hint=(1, 1))
+        box.add_widget(zone)
+
+        card = FigureCard(
+            maison=0,
+            bits=bits,
+            root=None,
+            repeated=True,
+            size_hint=(0.42, 0.72),
+            pos_hint={"center_x": 0.5, "center_y": 0.55}
+        )
+        zone.add_widget(card)
+
+        sens = Label(
+            text=d["sens"],
+            color=(1,1,1,1),
+            font_size=dp(15),
+            size_hint=(1, None),
+            height=dp(65),
+            pos_hint={"x": 0, "y": 0.02}
+        )
+        zone.add_widget(sens)
+
+        btn = Button(text="OK", size_hint=(1, None), height=dp(45))
+        box.add_widget(btn)
+
+        pop = Popup(title="Figure aléatoire", content=box, size_hint=(0.92, 0.82))
+        btn.bind(on_release=lambda x: pop.dismiss())
+        pop.open()
+
+    MoneyRoot.figure_hasard = figure_hasard_visuelle
+
+    def search_strict_positions_fixed(positions, target_bits=None, rare=False):
+        solutions = []
+        seen = set()
+        positions = [int(p) for p in positions]
+
+        for m1 in TOUTES_LES_FIGURES:
+            for m2 in TOUTES_LES_FIGURES:
+                for m3 in TOUTES_LES_FIGURES:
+                    for m4 in TOUTES_LES_FIGURES:
+                        h2 = developper_theme(m1, m2, m3, m4)
+                        vals = [h2[p] for p in positions]
+
+                        if not all(v == vals[0] for v in vals):
+                            continue
+
+                        fig = vals[0]
+
+                        if target_bits is not None and fig != target_bits:
+                            continue
+
+                        exact_pos = [i for i in range(1, 17) if h2[i] == fig]
+                        if exact_pos != positions:
+                            continue
+
+                        secondary = ""
+                        if rare:
+                            if h2[7] == h2[13] and h2[7] != fig:
+                                secondary = "7-13 " + data_fig(h2[7])["africain"]
+                            elif h2[7] == h2[15] and h2[7] != fig:
+                                secondary = "7-15 " + data_fig(h2[7])["africain"]
+                            else:
+                                continue
+
+                        key = (m1, m2, m3, m4, tuple(positions), fig, secondary)
+                        if key in seen:
+                            continue
+                        seen.add(key)
+
+                        solutions.append({
+                            "m1": m1,
+                            "m2": m2,
+                            "m3": m3,
+                            "m4": m4,
+                            "positions": positions[:],
+                            "figure": fig,
+                            "secondary": secondary,
+                        })
+
+        return solutions
+
+    globals()["search_strict_positions"] = search_strict_positions_fixed
+
+    def get_solutions_cached_fixed(self, positions, rare=False):
+        positions = [int(p) for p in positions]
+        key = self.cache_key(positions, rare)
+
+        if key in self.solution_cache:
+            return self.solution_cache[key]
+
+        self.info.text = "Calcul des 65 536 combinaisons en cours..."
+        sols = search_strict_positions_fixed(positions, None, rare)
+        self.solution_cache[key] = sols
+        write_json(CACHE_FILE, self.solution_cache)
+        return sols
+
+    MoneyRoot.get_solutions_cached = get_solutions_cached_fixed
+
+    def open_micro_fixed(self):
+        if platform == "android":
+            try:
+                from jnius import autoclass
+                Intent = autoclass("android.content.Intent")
+                PythonActivity = autoclass("org.kivy.android.PythonActivity")
+
+                intent = Intent("android.provider.MediaStore.RECORD_SOUND")
+                PythonActivity.mActivity.startActivity(intent)
+
+                self.message(
+                    "Micro",
+                    "Le micro Android a été ouvert. Après l'enregistrement, reviens dans GEOSTAR et écris le nom du fichier vocal dans la note."
+                )
+                return
+            except Exception:
+                pass
+
+            try:
+                from jnius import autoclass
+                Intent = autoclass("android.content.Intent")
+                PythonActivity = autoclass("org.kivy.android.PythonActivity")
+
+                intent = Intent(Intent.ACTION_MAIN)
+                intent.addCategory(Intent.CATEGORY_APP_MUSIC)
+                PythonActivity.mActivity.startActivity(intent)
+
+                self.message(
+                    "Micro",
+                    "J'ai ouvert les applications audio disponibles. Utilise l'enregistreur vocal puis note le nom du fichier dans GEOSTAR."
+                )
+                return
+            except Exception as e:
+                self.message(
+                    "Micro",
+                    "Pydroid bloque l'accès direct au micro sur cette tablette. Solution fiable : utilise l'application Enregistreur vocal du téléphone, puis écris le nom du fichier dans la note.\n\nErreur technique : " + str(e)
+                )
+                return
+
+        self.message(
+            "Micro",
+            "Sur iPhone ou Web, l'enregistrement vocal direct demande une version web spéciale ou une app native. Pour l'instant, utilise Dictaphone puis écris le nom du fichier dans la note."
+        )
+
+    MoneyRoot.open_micro = open_micro_fixed
+
+_money_v101_patch()
+
+
+
+# ============================================================
+# PATCH V10.3 - RECHERCHE STRICTE PERSONNALISEE + REPETITIONS
+# ============================================================
+
+def _money_v103_patch():
+
+    def search_custom_strict_positions(positions, target_bits=None, rare=False):
+        """
+        Recherche personnalisée stricte :
+        Exemple positions = [8,2,13]
+        GEOSTAR cherche tous les thèmes où une même figure apparaît
+        exactement en M8, M2 et M13, et pas ailleurs.
+
+        Les autres figures ont le droit de se répéter ailleurs.
+        """
+        solutions = []
+        seen = set()
+        positions = [int(p) for p in positions]
+
+        for m1 in TOUTES_LES_FIGURES:
+            for m2 in TOUTES_LES_FIGURES:
+                for m3 in TOUTES_LES_FIGURES:
+                    for m4 in TOUTES_LES_FIGURES:
+                        h2 = developper_theme(m1, m2, m3, m4)
+                        vals = [h2[p] for p in positions]
+
+                        if not all(v == vals[0] for v in vals):
+                            continue
+
+                        fig = vals[0]
+
+                        if target_bits is not None and fig != target_bits:
+                            continue
+
+                        # La figure ciblée ne doit apparaître QUE dans les maisons choisies.
+                        exact_pos = [i for i in range(1, 17) if h2[i] == fig]
+                        if exact_pos != positions:
+                            continue
+
+                        secondary = ""
+                        if rare:
+                            if h2[7] == h2[13] and h2[7] != fig:
+                                secondary = "7-13 " + data_fig(h2[7])["africain"]
+                            elif h2[7] == h2[15] and h2[7] != fig:
+                                secondary = "7-15 " + data_fig(h2[7])["africain"]
+                            else:
+                                continue
+
+                        key = (m1, m2, m3, m4, tuple(positions), fig, secondary)
+                        if key in seen:
+                            continue
+                        seen.add(key)
+
+                        solutions.append({
+                            "m1": m1,
+                            "m2": m2,
+                            "m3": m3,
+                            "m4": m4,
+                            "positions": positions[:],
+                            "figure": fig,
+                            "secondary": secondary,
+                            "all_positions": exact_pos,
+                        })
+
+        return solutions
+
+    def search_by_repetition_count(count, target_bits=None):
+        """
+        Cherche toutes les combinaisons où une figure apparaît exactement N fois.
+        Exemple count=3 : toutes les solutions où une figure apparaît exactement 3 fois.
+        """
+        count = int(count)
+        solutions = []
+        seen = set()
+
+        for m1 in TOUTES_LES_FIGURES:
+            for m2 in TOUTES_LES_FIGURES:
+                for m3 in TOUTES_LES_FIGURES:
+                    for m4 in TOUTES_LES_FIGURES:
+                        h2 = developper_theme(m1, m2, m3, m4)
+
+                        rep = {}
+                        for i in range(1, 17):
+                            rep.setdefault(h2[i], []).append(i)
+
+                        for fig, pos in rep.items():
+                            if len(pos) != count:
+                                continue
+                            if target_bits is not None and fig != target_bits:
+                                continue
+
+                            key = (m1, m2, m3, m4, fig, tuple(pos))
+                            if key in seen:
+                                continue
+                            seen.add(key)
+
+                            solutions.append({
+                                "m1": m1,
+                                "m2": m2,
+                                "m3": m3,
+                                "m4": m4,
+                                "positions": pos[:],
+                                "figure": fig,
+                                "secondary": "",
+                                "all_positions": pos[:],
+                            })
+
+        return solutions
+
+    def cache_key_v103(self, positions, rare=False):
+        return ("strict_rare_" if rare else "strict_custom_") + "_".join(map(str, positions))
+
+    def get_solutions_cached_v103(self, positions, rare=False):
+        positions = [int(p) for p in positions]
+        key = cache_key_v103(self, positions, rare)
+
+        if key in self.solution_cache:
+            return self.solution_cache[key]
+
+        self.info.text = "Recherche stricte : calcul des 65 536 combinaisons..."
+        sols = search_custom_strict_positions(positions, None, rare)
+        self.solution_cache[key] = sols
+        write_json(CACHE_FILE, self.solution_cache)
+        return sols
+
+    MoneyRoot.cache_key = cache_key_v103
+    MoneyRoot.get_solutions_cached = get_solutions_cached_v103
+
+    def open_solution_window_v103(self, title, positions, rare):
+        content = BoxLayout(orientation="vertical", padding=dp(6), spacing=dp(6))
+        header = Label(
+            text=f"{title}\nRecherche stricte : la figure doit apparaître uniquement dans les maisons choisies.",
+            color=(1,1,1,1),
+            size_hint=(1,None),
+            height=dp(75)
+        )
+        content.add_widget(header)
+
+        sv = ScrollView()
+        grid = GridLayout(cols=1, spacing=dp(3), size_hint_y=None)
+        grid.bind(minimum_height=grid.setter("height"))
+        sv.add_widget(grid)
+        content.add_widget(sv)
+
+        close = Button(text="FERMER", size_hint=(1,None), height=dp(42))
+        content.add_widget(close)
+
+        pop = Popup(title=title, content=content, size_hint=(0.98,0.92))
+        close.bind(on_release=lambda x: pop.dismiss())
+        pop.open()
+
+        def fill(dt):
+            try:
+                sols = self.get_solutions_cached(positions, rare)
+                header.text = f"{title}\nTotal : {len(sols)} solution(s)"
+                if not sols:
+                    grid.add_widget(Label(
+                        text="Aucune solution stricte trouvée pour ces maisons.",
+                        color=(1,1,1,1),
+                        size_hint_y=None,
+                        height=dp(60)
+                    ))
+                    return
+
+                for idx, sol in enumerate(sols, 1):
+                    fig = data_fig(sol["figure"])["africain"]
+                    sec = (" | " + sol["secondary"]) if sol.get("secondary") else ""
+                    allpos = sol.get("all_positions", sol.get("positions", []))
+                    txt = (
+                        f"{idx}. {fig} uniquement {allpos}\n"
+                        f"M1={sol['m1']} M2={sol['m2']} M3={sol['m3']} M4={sol['m4']}{sec}"
+                    )
+                    b = Button(text=txt, font_size=dp(10), size_hint_y=None, height=dp(54))
+                    b.bind(on_release=lambda btn, s=sol, sol_list=sols, pp=pop: self.apply_solution_from_list(s, sol_list, pp))
+                    grid.add_widget(b)
+            except Exception as e:
+                header.text = "Erreur"
+                grid.add_widget(Label(text=str(e), color=(1,1,1,1), size_hint_y=None, height=dp(80)))
+
+        Clock.schedule_once(fill, 0.1)
+
+    MoneyRoot.open_solution_window = open_solution_window_v103
+
+    def popup_repetition_count(self):
+        box = BoxLayout(orientation="vertical", spacing=dp(6), padding=dp(8))
+        box.add_widget(Label(
+            text="GEOSTAR peut chercher toutes les solutions où une figure apparaît exactement N fois.",
+            color=(1,1,1,1),
+            size_hint=(1,None),
+            height=dp(60)
+        ))
+
+        count_input = TextInput(
+            hint_text="Nombre de répétitions désiré, exemple : 3",
+            multiline=False
+        )
+        figure_input = TextInput(
+            hint_text="Figure facultative : Sedjou ou 1121. Vide = toutes les figures",
+            multiline=False
+        )
+        box.add_widget(count_input)
+        box.add_widget(figure_input)
+
+        btn = Button(text="CALCULER", size_hint=(1,None), height=dp(45))
+        box.add_widget(btn)
+
+        pop = Popup(title="Recherche par nombre de répétitions", content=box, size_hint=(0.92,0.55))
+
+        def go(_):
+            try:
+                count = int(count_input.text.strip())
+                if count < 2 or count > 16:
+                    raise ValueError("Le nombre doit être entre 2 et 16.")
+
+                target = None
+                if figure_input.text.strip():
+                    target = code_vers_bin(figure_input.text.strip())
+
+                pop.dismiss()
+                self.open_repetition_results(count, target)
+            except Exception as e:
+                self.message("Erreur", str(e))
+
+        btn.bind(on_release=go)
+        pop.open()
+
+    MoneyRoot.popup_repetition_count = popup_repetition_count
+
+    def open_repetition_results(self, count, target_bits=None):
+        title = f"Répétition exacte x{count}"
+        content = BoxLayout(orientation="vertical", padding=dp(6), spacing=dp(6))
+        header = Label(
+            text=f"{title}\nCalcul des 65 536 combinaisons...",
+            color=(1,1,1,1),
+            size_hint=(1,None),
+            height=dp(65)
+        )
+        content.add_widget(header)
+
+        sv = ScrollView()
+        grid = GridLayout(cols=1, spacing=dp(3), size_hint_y=None)
+        grid.bind(minimum_height=grid.setter("height"))
+        sv.add_widget(grid)
+        content.add_widget(sv)
+
+        close = Button(text="FERMER", size_hint=(1,None), height=dp(42))
+        content.add_widget(close)
+
+        pop = Popup(title=title, content=content, size_hint=(0.98,0.92))
+        close.bind(on_release=lambda x: pop.dismiss())
+        pop.open()
+
+        def fill(dt):
+            key = "repeat_count_" + str(count) + "_" + (target_bits if target_bits else "all")
+            if key in self.solution_cache:
+                sols = self.solution_cache[key]
+            else:
+                sols = search_by_repetition_count(count, target_bits)
+                self.solution_cache[key] = sols
+                write_json(CACHE_FILE, self.solution_cache)
+
+            header.text = f"{title}\nTotal : {len(sols)} solution(s)"
+
+            for idx, sol in enumerate(sols, 1):
+                fig = data_fig(sol["figure"])["africain"]
+                txt = (
+                    f"{idx}. {fig} x{count} en maisons {sol['positions']}\n"
+                    f"M1={sol['m1']} M2={sol['m2']} M3={sol['m3']} M4={sol['m4']}"
+                )
+                b = Button(text=txt, font_size=dp(10), size_hint_y=None, height=dp(54))
+                b.bind(on_release=lambda btn, s=sol, sol_list=sols, pp=pop: self.apply_solution_from_list(s, sol_list, pp))
+                grid.add_widget(b)
+
+        Clock.schedule_once(fill, 0.1)
+
+    MoneyRoot.open_repetition_results = open_repetition_results
+
+    old_popup_solutions = MoneyRoot.popup_solutions
+
+    def popup_solutions_v103(self):
+        box = BoxLayout(orientation="vertical", spacing=dp(6), padding=dp(8))
+        box.add_widget(Label(
+            text="Solutions intégrées + recherches personnalisées strictes.",
+            color=(1,1,1,1),
+            size_hint=(1,None),
+            height=dp(40)
+        ))
+
+        options = [
+            ("5-10-16 toutes", [5,10,16], False),
+            ("5-10-16 rares 7-13/7-15", [5,10,16], True),
+            ("3-10-15 toutes", [3,10,15], False),
+            ("10-11-15", [10,11,15], False),
+            ("3-11-15", [3,11,15], False),
+            ("2-3-13", [2,3,13], False),
+            ("10-13-15", [10,13,15], False),
+            ("2-10-15", [2,10,15], False),
+        ]
+
+        for name, pos, rare in options:
+            b = Button(text=name, size_hint=(1,None), height=dp(38))
+            b.bind(on_release=lambda btn, n=name, p=pos, r=rare: self.open_solution_window(n, p, r))
+            box.add_widget(b)
+
+        add = Button(text="+ AJOUTER RECHERCHE PERSONNALISÉE", size_hint=(1,None), height=dp(42))
+        add.bind(on_release=lambda x: self.popup_add_custom_search())
+        box.add_widget(add)
+
+        rep_btn = Button(text="RECHERCHE PAR NOMBRE DE RÉPÉTITIONS", size_hint=(1,None), height=dp(42))
+        rep_btn.bind(on_release=lambda x: self.popup_repetition_count())
+        box.add_widget(rep_btn)
+
+        if self.custom_searches:
+            box.add_widget(Label(text="Recherches perso :", color=(1,1,1,1), size_hint=(1,None), height=dp(26)))
+            for item in self.custom_searches:
+                name = item.get("name", "Sans nom")
+                pos = item.get("positions", [])
+                b = Button(text=f"{name} : {pos}", size_hint=(1,None), height=dp(36))
+                b.bind(on_release=lambda btn, it=item: self.open_solution_window(it.get("name","Perso"), it.get("positions",[]), False))
+                box.add_widget(b)
+
+        manage = Button(text="SUPPRIMER UNE RECHERCHE PERSO", size_hint=(1,None), height=dp(42))
+        manage.bind(on_release=lambda x: self.popup_delete_custom_search())
+        box.add_widget(manage)
+
+        Popup(title="SOLUTIONS", content=box, size_hint=(0.94,0.92)).open()
+
+    MoneyRoot.popup_solutions = popup_solutions_v103
+
+    def popup_notes_current_v103(self):
+        existing = None
+        for n in self.notes:
+            if n.get("key") == self.current_key():
+                existing = n
+                break
+
+        box = BoxLayout(orientation="vertical", spacing=dp(6), padding=dp(8))
+
+        name = TextInput(
+            hint_text="Nom de la note",
+            multiline=False,
+            text=existing.get("nom", "") if existing else ""
+        )
+        note = TextInput(
+            hint_text="Note écrite",
+            multiline=True,
+            text=existing.get("note", "") if existing else ""
+        )
+        vocal = TextInput(
+            hint_text="Mémo vocal : nom du fichier ou chemin",
+            multiline=False,
+            text=existing.get("vocal", "") if existing else ""
+        )
+
+        box.add_widget(name)
+        box.add_widget(note)
+        box.add_widget(vocal)
+
+        btns1 = BoxLayout(orientation="horizontal", size_hint=(1,None), height=dp(45), spacing=dp(5))
+        save_btn = Button(text="ENREGISTRER")
+        mic_btn = Button(text="MICRO")
+        play_btn = Button(text="LIRE VOCAL")
+        btns1.add_widget(save_btn)
+        btns1.add_widget(mic_btn)
+        btns1.add_widget(play_btn)
+        box.add_widget(btns1)
+
+        btns2 = BoxLayout(orientation="horizontal", size_hint=(1,None), height=dp(45), spacing=dp(5))
+        delete_vocal_btn = Button(text="SUPPRIMER VOCAL")
+        delete_note_btn = Button(text="SUPPRIMER NOTE")
+        close_btn = Button(text="FERMER")
+        btns2.add_widget(delete_vocal_btn)
+        btns2.add_widget(delete_note_btn)
+        btns2.add_widget(close_btn)
+        box.add_widget(btns2)
+
+        pop = Popup(title="NOTE du thème", content=box, size_hint=(0.94,0.84))
+
+        def save(_):
+            item = {
+                "key": self.current_key(),
+                "date": datetime.now().strftime("%d/%m/%Y %H:%M:%S"),
+                "nom": name.text.strip() or "Note sans nom",
+                "note": note.text.strip(),
+                "vocal": vocal.text.strip(),
+                "meres": self.mother_codes,
+                "maisons": {str(k): v for k, v in self.h.items()},
+            }
+
+            found = False
+            for i, n in enumerate(self.notes):
+                if n.get("key") == item["key"]:
+                    self.notes[i] = item
+                    found = True
+                    break
+            if not found:
+                self.notes.append(item)
+
+            write_json(NOTES_FILE, self.notes)
+            pop.dismiss()
+            self.message("NOTE", "Note enregistrée.")
+
+        def delete_vocal(_):
+            vocal.text = ""
+            self.message("Vocal", "Mémo vocal supprimé de cette note. Clique ensuite sur ENREGISTRER.")
+
+        def delete_note(_):
+            self.notes = [n for n in self.notes if n.get("key") != self.current_key()]
+            write_json(NOTES_FILE, self.notes)
+            pop.dismiss()
+            self.message("NOTE", "Note supprimée.")
+
+        def play_vocal(_):
+            v = vocal.text.strip()
+            if not v:
+                self.message("Vocal", "Aucun mémo vocal indiqué dans cette note.")
+                return
+            self.message("Vocal", "Mémo vocal enregistré :\n" + v)
+
+        save_btn.bind(on_release=save)
+        mic_btn.bind(on_release=lambda x: self.open_micro())
+        play_btn.bind(on_release=play_vocal)
+        delete_vocal_btn.bind(on_release=delete_vocal)
+        delete_note_btn.bind(on_release=delete_note)
+        close_btn.bind(on_release=lambda x: pop.dismiss())
+
+        pop.open()
+
+    MoneyRoot.popup_notes_current = popup_notes_current_v103
+
+_money_v103_patch()
+
+
+
+# ============================================================
+# PATCH GEOSTAR - ALIGNEMENT MAISONS 14 13 15 16
+# ============================================================
+
+def _geostar_alignment_patch():
+    def maison_positions_geostar(self):
+        return {
+            # Ligne 1 droite -> gauche : M1 a droite, M8 a gauche
+            8:(0.04,0.79,0.10,0.18),
+            7:(0.16,0.79,0.10,0.18),
+            6:(0.28,0.79,0.10,0.18),
+            5:(0.40,0.79,0.10,0.18),
+            4:(0.52,0.79,0.10,0.18),
+            3:(0.64,0.79,0.10,0.18),
+            2:(0.76,0.79,0.10,0.18),
+            1:(0.88,0.79,0.10,0.18),
+
+            # Ligne 2
+            12:(0.10,0.57,0.10,0.18),
+            11:(0.34,0.57,0.10,0.18),
+            10:(0.58,0.57,0.10,0.18),
+            9:(0.82,0.57,0.10,0.18),
+
+            # Ligne 3 : M14, M15, M13, M16 alignées
+            # M15 est entre M14 et M13.
+            # M16 est à droite de M13.
+            14:(0.20,0.33,0.10,0.18),
+            15:(0.43,0.33,0.10,0.18),
+            13:(0.66,0.33,0.10,0.18),
+            16:(0.84,0.33,0.10,0.18),
+        }
+
+    MoneyRoot.maison_positions = maison_positions_geostar
+
+_geostar_alignment_patch()
+
+
+
+# ============================================================
+# GEOSTAR V10.5 - PATCH COMPLET
+# ============================================================
+# Corrections appliquées :
+# - Vent = jaune
+# - Terre = marron
+# - Statistiques bas écran : points 1 / points 2 + Feu/Vent/Eau/Terre
+# - Recherche indépendante de l'ordre des maisons
+# - Recherche personnalisée stricte : la figure ciblée apparaît uniquement
+#   dans les maisons choisies, les autres figures peuvent se répéter ailleurs
+# - Fermeture automatique de la fenêtre solution au clic
+# - Cache permanent
+# - Recherches par nombre de répétitions sauvegardables/supprimables
+# - Notes vocales internes : enregistrer / arrêter / lire / supprimer
+# ============================================================
+
+REPEAT_FILE = "geostar_recherches_repetitions.json"
+VOCAL_DIR = "geostar_vocaux"
+
+def _geostar_v105_patch():
+
+    # ---------------- COULEURS ----------------
+
+    def element_color_v105(element):
+        if element == "feu":
+            return (1.0, 0.18, 0.12, 1)       # rouge
+        if element == "vent":
+            return (1.0, 0.85, 0.05, 1)       # jaune
+        if element == "eau":
+            return (0.15, 0.42, 1.0, 1)       # bleu
+        if element == "terre":
+            return (0.48, 0.28, 0.12, 1)      # marron
+        if element == "quantique":
+            return (0.65, 0.30, 1.0, 1)
+        return (1, 1, 1, 1)
+
+    globals()["element_color"] = element_color_v105
+
+    # ---------------- POSITIONS MAISONS ----------------
+
+    def maison_positions_geostar_v105(self):
+        return {
+            8:(0.04,0.79,0.10,0.18),
+            7:(0.16,0.79,0.10,0.18),
+            6:(0.28,0.79,0.10,0.18),
+            5:(0.40,0.79,0.10,0.18),
+            4:(0.52,0.79,0.10,0.18),
+            3:(0.64,0.79,0.10,0.18),
+            2:(0.76,0.79,0.10,0.18),
+            1:(0.88,0.79,0.10,0.18),
+
+            12:(0.10,0.57,0.10,0.18),
+            11:(0.34,0.57,0.10,0.18),
+            10:(0.58,0.57,0.10,0.18),
+            9:(0.82,0.57,0.10,0.18),
+
+            # 14, 15, 13, 16 sur la même ligne
+            14:(0.20,0.33,0.10,0.18),
+            15:(0.43,0.33,0.10,0.18),
+            13:(0.66,0.33,0.10,0.18),
+            16:(0.84,0.33,0.10,0.18),
+        }
+
+    MoneyRoot.maison_positions = maison_positions_geostar_v105
+
+    # ---------------- STATISTIQUES ----------------
+
+    def mettre_infos_v105(self):
+        portes = analyser_portes(self.h)
+        texte_portes = " | ".join([f"{p[0]}:{data_fig(p[1])['africain']}" for p in portes]) if portes else "Aucune porte"
+
+        points_1 = 0
+        points_2 = 0
+        feu = vent = eau = terre = quantique = 0
+
+        for i in range(1, 17):
+            bits = self.h[i]
+            points_1 += bits.count("1")
+            points_2 += bits.count("0")
+
+            el = element_of_bits(bits)
+            if el == "feu":
+                feu += 1
+            elif el == "vent":
+                vent += 1
+            elif el == "eau":
+                eau += 1
+            elif el == "terre":
+                terre += 1
+            elif el == "quantique":
+                quantique += 1
+
+        nav = ""
+        if getattr(self, "active_solutions", None) and self.active_solution_index >= 0:
+            nav = f"\nSolution {self.active_solution_index+1}/{len(self.active_solutions)} — glisse gauche/droite"
+
+        self.info.text = (
+            f"Points 1 : {points_1} | Points 2 : {points_2}\n"
+            f"Feu : {feu} | Vent : {vent} | Eau : {eau} | Terre : {terre}\n"
+            f"Portes : {texte_portes}{nav}"
+        )
+
+    MoneyRoot.mettre_infos = mettre_infos_v105
+
+    # ---------------- RECHERCHE ORDRE INDEPENDANT ----------------
+
+    def parse_positions_v105(txt):
+        nums = [int(x) for x in re.findall(r"\d+", txt)]
+        nums = [n for n in nums if 1 <= n <= 16]
+        nums = sorted(set(nums))
+        if len(nums) < 2:
+            raise ValueError("Il faut au moins deux maisons. Exemple : M8 M7 M3 M9")
+        return nums
+
+    globals()["parse_positions"] = parse_positions_v105
+
+    def search_custom_strict_positions_v105(positions, target_bits=None, rare=False):
+        """
+        Recherche stricte :
+        - Les maisons choisies peuvent être dans n'importe quel ordre.
+        - Une même figure doit apparaître exactement dans ces maisons.
+        - Cette figure ne doit pas apparaître ailleurs.
+        - Les autres figures peuvent se répéter ailleurs.
+        """
+        wanted = sorted(set([int(p) for p in positions]))
+        solutions = []
+        seen = set()
+
+        for m1 in TOUTES_LES_FIGURES:
+            for m2 in TOUTES_LES_FIGURES:
+                for m3 in TOUTES_LES_FIGURES:
+                    for m4 in TOUTES_LES_FIGURES:
+                        h2 = developper_theme(m1, m2, m3, m4)
+                        vals = [h2[p] for p in wanted]
+
+                        if not all(v == vals[0] for v in vals):
+                            continue
+
+                        fig = vals[0]
+
+                        if target_bits is not None and fig != target_bits:
+                            continue
+
+                        exact_pos = sorted([i for i in range(1, 17) if h2[i] == fig])
+                        if exact_pos != wanted:
+                            continue
+
+                        secondary = ""
+                        if rare:
+                            if h2[7] == h2[13] and h2[7] != fig:
+                                secondary = "7-13 " + data_fig(h2[7])["africain"]
+                            elif h2[7] == h2[15] and h2[7] != fig:
+                                secondary = "7-15 " + data_fig(h2[7])["africain"]
+                            else:
+                                continue
+
+                        key = (m1, m2, m3, m4, tuple(wanted), fig, secondary)
+                        if key in seen:
+                            continue
+                        seen.add(key)
+
+                        solutions.append({
+                            "m1": m1,
+                            "m2": m2,
+                            "m3": m3,
+                            "m4": m4,
+                            "positions": wanted[:],
+                            "figure": fig,
+                            "secondary": secondary,
+                            "all_positions": exact_pos,
+                        })
+
+        return solutions
+
+    globals()["search_strict_positions"] = search_custom_strict_positions_v105
+
+    def cache_key_v105(self, positions, rare=False):
+        positions = sorted(set([int(p) for p in positions]))
+        return ("strict_rare_" if rare else "strict_custom_") + "_".join(map(str, positions))
+
+    def get_solutions_cached_v105(self, positions, rare=False):
+        positions = sorted(set([int(p) for p in positions]))
+        key = self.cache_key(positions, rare)
+
+        if key in self.solution_cache:
+            return self.solution_cache[key]
+
+        self.info.text = "Calcul strict des 65 536 combinaisons..."
+        sols = search_custom_strict_positions_v105(positions, None, rare)
+        self.solution_cache[key] = sols
+        write_json(CACHE_FILE, self.solution_cache)
+        return sols
+
+    MoneyRoot.cache_key = cache_key_v105
+    MoneyRoot.get_solutions_cached = get_solutions_cached_v105
+
+    # ---------------- SOLUTIONS ----------------
+
+    def open_solution_window_v105(self, title, positions, rare):
+        positions = sorted(set([int(p) for p in positions]))
+
+        content = BoxLayout(orientation="vertical", padding=dp(6), spacing=dp(6))
+        header = Label(
+            text=f"{title}\nRecherche stricte : la figure apparaît uniquement dans {positions}.",
+            color=(1,1,1,1),
+            size_hint=(1,None),
+            height=dp(75)
+        )
+        content.add_widget(header)
+
+        sv = ScrollView()
+        grid = GridLayout(cols=1, spacing=dp(3), size_hint_y=None)
+        grid.bind(minimum_height=grid.setter("height"))
+        sv.add_widget(grid)
+        content.add_widget(sv)
+
+        close = Button(text="FERMER", size_hint=(1,None), height=dp(42))
+        content.add_widget(close)
+
+        pop = Popup(title=title, content=content, size_hint=(0.98,0.92))
+        close.bind(on_release=lambda x: pop.dismiss())
+        pop.open()
+
+        def fill(dt):
+            try:
+                sols = self.get_solutions_cached(positions, rare)
+                header.text = f"{title}\nTotal : {len(sols)} solution(s)"
+
+                if not sols:
+                    grid.add_widget(Label(
+                        text="Aucune solution stricte trouvée.",
+                        color=(1,1,1,1),
+                        size_hint_y=None,
+                        height=dp(60)
+                    ))
+                    return
+
+                for idx, sol in enumerate(sols, 1):
+                    fig = data_fig(sol["figure"])["africain"]
+                    sec = (" | " + sol["secondary"]) if sol.get("secondary") else ""
+                    txt = (
+                        f"{idx}. {fig} uniquement {sol['positions']}\n"
+                        f"M1={sol['m1']} M2={sol['m2']} M3={sol['m3']} M4={sol['m4']}{sec}"
+                    )
+                    b = Button(text=txt, font_size=dp(10), size_hint_y=None, height=dp(54))
+                    b.bind(on_release=lambda btn, s=sol, sol_list=sols, pp=pop: self.apply_solution_from_list_v105(s, sol_list, pp))
+                    grid.add_widget(b)
+
+            except Exception as e:
+                header.text = "Erreur"
+                grid.add_widget(Label(text=str(e), color=(1,1,1,1), size_hint_y=None, height=dp(80)))
+
+        Clock.schedule_once(fill, 0.1)
+
+    MoneyRoot.open_solution_window = open_solution_window_v105
+
+    def apply_solution_from_list_v105(self, sol, sol_list, pop=None):
+        if pop:
+            pop.dismiss()
+        self.active_solutions = sol_list
+        try:
+            self.active_solution_index = sol_list.index(sol)
+        except ValueError:
+            self.active_solution_index = 0
+
+        self.mother_codes = [sol["m1"], sol["m2"], sol["m3"], sol["m4"]]
+        self.afficher_theme(developper_theme(*self.mother_codes))
+
+    MoneyRoot.apply_solution_from_list_v105 = apply_solution_from_list_v105
+    MoneyRoot.apply_solution_from_list = apply_solution_from_list_v105
+
+    # ---------------- RECHERCHES PAR NOMBRE DE REPETITIONS ----------------
+
+    def get_repeat_searches(self):
+        if not hasattr(self, "repeat_searches"):
+            self.repeat_searches = read_json(REPEAT_FILE, [])
+        return self.repeat_searches
+
+    def save_repeat_searches(self):
+        write_json(REPEAT_FILE, self.get_repeat_searches())
+
+    MoneyRoot.get_repeat_searches = get_repeat_searches
+    MoneyRoot.save_repeat_searches = save_repeat_searches
+
+    def search_by_repetition_count_v105(count, target_bits=None):
+        count = int(count)
+        solutions = []
+        seen = set()
+
+        for m1 in TOUTES_LES_FIGURES:
+            for m2 in TOUTES_LES_FIGURES:
+                for m3 in TOUTES_LES_FIGURES:
+                    for m4 in TOUTES_LES_FIGURES:
+                        h2 = developper_theme(m1, m2, m3, m4)
+
+                        rep = {}
+                        for i in range(1, 17):
+                            rep.setdefault(h2[i], []).append(i)
+
+                        for fig, pos in rep.items():
+                            if len(pos) != count:
+                                continue
+                            if target_bits is not None and fig != target_bits:
+                                continue
+
+                            pos = sorted(pos)
+                            key = (m1, m2, m3, m4, fig, tuple(pos))
+                            if key in seen:
+                                continue
+                            seen.add(key)
+
+                            solutions.append({
+                                "m1": m1,
+                                "m2": m2,
+                                "m3": m3,
+                                "m4": m4,
+                                "positions": pos[:],
+                                "figure": fig,
+                                "secondary": "",
+                                "all_positions": pos[:],
+                            })
+
+        return solutions
+
+    globals()["search_by_repetition_count"] = search_by_repetition_count_v105
+
+    def popup_repetition_count_v105(self):
+        box = BoxLayout(orientation="vertical", spacing=dp(6), padding=dp(8))
+        box.add_widget(Label(
+            text="Cherche toutes les solutions où une figure apparaît exactement N fois.",
+            color=(1,1,1,1),
+            size_hint=(1,None),
+            height=dp(55)
+        ))
+
+        count_input = TextInput(hint_text="Nombre de répétitions, exemple : 3", multiline=False)
+        figure_input = TextInput(hint_text="Figure facultative : Sedjou ou 1121. Vide = toutes", multiline=False)
+        name_input = TextInput(hint_text="Nom de cette recherche à sauvegarder", multiline=False)
+
+        box.add_widget(count_input)
+        box.add_widget(figure_input)
+        box.add_widget(name_input)
+
+        btn = Button(text="CALCULER ET SAUVEGARDER", size_hint=(1,None), height=dp(45))
+        box.add_widget(btn)
+
+        pop = Popup(title="Recherche par répétitions", content=box, size_hint=(0.92,0.65))
+
+        def go(_):
+            try:
+                count = int(count_input.text.strip())
+                if count < 2 or count > 16:
+                    raise ValueError("Le nombre doit être entre 2 et 16.")
+
+                target = None
+                fig_label = "toutes figures"
+                if figure_input.text.strip():
+                    target = code_vers_bin(figure_input.text.strip())
+                    fig_label = data_fig(target)["africain"]
+
+                item = {
+                    "name": name_input.text.strip() or f"Répétition x{count} {fig_label}",
+                    "count": count,
+                    "target": target,
+                }
+
+                searches = self.get_repeat_searches()
+                if item not in searches:
+                    searches.append(item)
+                    self.save_repeat_searches()
+
+                pop.dismiss()
+                self.open_repetition_results_v105(count, target)
+
+            except Exception as e:
+                self.message("Erreur", str(e))
+
+        btn.bind(on_release=go)
+        pop.open()
+
+    MoneyRoot.popup_repetition_count = popup_repetition_count_v105
+
+    def open_repetition_results_v105(self, count, target_bits=None):
+        title = f"Répétition exacte x{count}"
+        content = BoxLayout(orientation="vertical", padding=dp(6), spacing=dp(6))
+        header = Label(text=f"{title}\nCalcul...", color=(1,1,1,1), size_hint=(1,None), height=dp(65))
+        content.add_widget(header)
+
+        sv = ScrollView()
+        grid = GridLayout(cols=1, spacing=dp(3), size_hint_y=None)
+        grid.bind(minimum_height=grid.setter("height"))
+        sv.add_widget(grid)
+        content.add_widget(sv)
+
+        close = Button(text="FERMER", size_hint=(1,None), height=dp(42))
+        content.add_widget(close)
+
+        pop = Popup(title=title, content=content, size_hint=(0.98,0.92))
+        close.bind(on_release=lambda x: pop.dismiss())
+        pop.open()
+
+        def fill(dt):
+            key = "repeat_count_" + str(count) + "_" + (target_bits if target_bits else "all")
+            if key in self.solution_cache:
+                sols = self.solution_cache[key]
+            else:
+                sols = search_by_repetition_count_v105(count, target_bits)
+                self.solution_cache[key] = sols
+                write_json(CACHE_FILE, self.solution_cache)
+
+            header.text = f"{title}\nTotal : {len(sols)} solution(s)"
+
+            for idx, sol in enumerate(sols, 1):
+                fig = data_fig(sol["figure"])["africain"]
+                txt = (
+                    f"{idx}. {fig} x{count} en maisons {sol['positions']}\n"
+                    f"M1={sol['m1']} M2={sol['m2']} M3={sol['m3']} M4={sol['m4']}"
+                )
+                b = Button(text=txt, font_size=dp(10), size_hint_y=None, height=dp(54))
+                b.bind(on_release=lambda btn, s=sol, sol_list=sols, pp=pop: self.apply_solution_from_list_v105(s, sol_list, pp))
+                grid.add_widget(b)
+
+        Clock.schedule_once(fill, 0.1)
+
+    MoneyRoot.open_repetition_results_v105 = open_repetition_results_v105
+
+    def popup_delete_repeat_search(self):
+        searches = self.get_repeat_searches()
+
+        content = BoxLayout(orientation="vertical", padding=dp(6), spacing=dp(6))
+        content.add_widget(Label(text="Supprimer une recherche par répétitions.", color=(1,1,1,1), size_hint=(1,None), height=dp(40)))
+
+        if not searches:
+            content.add_widget(Label(text="Aucune recherche enregistrée.", color=(1,1,1,1), size_hint=(1,None), height=dp(45)))
+
+        for item in searches:
+            txt = f"{item.get('name')} | x{item.get('count')}"
+            b = Button(text=txt, size_hint=(1,None), height=dp(42))
+            b.bind(on_release=lambda btn, it=item: self.delete_repeat_search(it))
+            content.add_widget(b)
+
+        close = Button(text="FERMER", size_hint=(1,None), height=dp(42))
+        content.add_widget(close)
+
+        pop = Popup(title="Supprimer répétitions", content=content, size_hint=(0.92,0.75))
+        close.bind(on_release=lambda x: pop.dismiss())
+        pop.open()
+
+    MoneyRoot.popup_delete_repeat_search = popup_delete_repeat_search
+
+    def delete_repeat_search(self, item):
+        self.repeat_searches = [x for x in self.get_repeat_searches() if x != item]
+        self.save_repeat_searches()
+        self.message("Répétitions", "Recherche supprimée.")
+
+    MoneyRoot.delete_repeat_search = delete_repeat_search
+
+    # ---------------- MENU SOLUTIONS COMPLET ----------------
+
+    def popup_solutions_v105(self):
+        box = BoxLayout(orientation="vertical", spacing=dp(6), padding=dp(8))
+        box.add_widget(Label(text="Solutions + recherches personnalisées.", color=(1,1,1,1), size_hint=(1,None), height=dp(36)))
+
+        options = [
+            ("5-10-16 toutes", [5,10,16], False),
+            ("5-10-16 rares 7-13/7-15", [5,10,16], True),
+            ("3-10-15 toutes", [3,10,15], False),
+            ("10-11-15", [10,11,15], False),
+            ("3-11-15", [3,11,15], False),
+            ("2-3-13", [2,3,13], False),
+            ("10-13-15", [10,13,15], False),
+            ("2-10-15", [2,10,15], False),
+        ]
+
+        for name, pos, rare in options:
+            b = Button(text=name, size_hint=(1,None), height=dp(36))
+            b.bind(on_release=lambda btn, n=name, p=pos, r=rare: self.open_solution_window(n, p, r))
+            box.add_widget(b)
+
+        add = Button(text="+ AJOUTER RECHERCHE PERSONNALISÉE", size_hint=(1,None), height=dp(40))
+        add.bind(on_release=lambda x: self.popup_add_custom_search())
+        box.add_widget(add)
+
+        rep_btn = Button(text="+ RECHERCHE PAR NOMBRE DE RÉPÉTITIONS", size_hint=(1,None), height=dp(40))
+        rep_btn.bind(on_release=lambda x: self.popup_repetition_count())
+        box.add_widget(rep_btn)
+
+        if self.custom_searches:
+            box.add_widget(Label(text="Recherches perso :", color=(1,1,1,1), size_hint=(1,None), height=dp(24)))
+            for item in self.custom_searches:
+                name = item.get("name", "Sans nom")
+                pos = sorted(set(item.get("positions", [])))
+                b = Button(text=f"{name} : {pos}", size_hint=(1,None), height=dp(34))
+                b.bind(on_release=lambda btn, it=item: self.open_solution_window(it.get("name","Perso"), sorted(set(it.get("positions",[]))), False))
+                box.add_widget(b)
+
+        repeat_searches = self.get_repeat_searches()
+        if repeat_searches:
+            box.add_widget(Label(text="Recherches répétitions :", color=(1,1,1,1), size_hint=(1,None), height=dp(24)))
+            for item in repeat_searches:
+                name = item.get("name", "Répétition")
+                count = item.get("count")
+                target = item.get("target")
+                b = Button(text=f"{name} | x{count}", size_hint=(1,None), height=dp(34))
+                b.bind(on_release=lambda btn, it=item: self.open_repetition_results_v105(it.get("count"), it.get("target")))
+                box.add_widget(b)
+
+        manage = Button(text="SUPPRIMER RECHERCHE PERSO", size_hint=(1,None), height=dp(38))
+        manage.bind(on_release=lambda x: self.popup_delete_custom_search())
+        box.add_widget(manage)
+
+        manage_rep = Button(text="SUPPRIMER RECHERCHE RÉPÉTITIONS", size_hint=(1,None), height=dp(38))
+        manage_rep.bind(on_release=lambda x: self.popup_delete_repeat_search())
+        box.add_widget(manage_rep)
+
+        Popup(title="SOLUTIONS", content=box, size_hint=(0.94,0.94)).open()
+
+    MoneyRoot.popup_solutions = popup_solutions_v105
+
+_geostar_v105_patch()
+
+
+
+# ============================================================
+# GEOSTAR V10.6 - VOCAUX INTERNES + NUANCES COULEURS
+# ============================================================
+import time
+
+def _geostar_v106_patch():
+    def color_for_bits_v106(bits):
+        if bits not in BIN_TO_CODE:
+            return (0.65, 0.30, 1.0, 1)
+        code = BIN_TO_CODE[bits]
+        maps = {
+            "1121": (1.00, 0.10, 0.08, 1), "1222": (1.00, 0.28, 0.20, 1),
+            "1122": (0.86, 0.05, 0.04, 1), "1212": (1.00, 0.45, 0.35, 1),
+            "2111": (1.00, 0.92, 0.10, 1), "2122": (0.92, 0.78, 0.05, 1),
+            "2112": (1.00, 0.82, 0.22, 1), "2121": (0.78, 0.68, 0.05, 1),
+            "1111": (0.10, 0.35, 1.00, 1), "2222": (0.20, 0.55, 1.00, 1),
+            "1112": (0.05, 0.22, 0.85, 1), "2212": (0.38, 0.68, 1.00, 1),
+            "2211": (0.44, 0.24, 0.10, 1), "1221": (0.58, 0.34, 0.16, 1),
+            "1211": (0.36, 0.20, 0.08, 1), "2221": (0.70, 0.45, 0.23, 1),
+        }
+        return maps.get(code, (1,1,1,1))
+
+    def redraw(self, *args):
+        self.canvas.clear()
+        x, y = self.pos
+        w, h = self.size
+        if w <= 5 or h <= 5:
+            return
+        with self.canvas:
+            if getattr(self, "repeated", False):
+                Color(*color_for_bits_v106(self.bits))
+            else:
+                Color(1, 1, 1, 1)
+            RoundedRectangle(pos=(x, y), size=(w, h), radius=[dp(5)])
+            Color(0, 0, 0, 1)
+            top = h * 0.17
+            bottom = h * 0.13
+            row_gap = (h - top - bottom) / 4.0
+            dot_r = min(w, h) * 0.055
+            sep = w * 0.18
+            for i, b in enumerate(self.bits):
+                cy = y + h - top - (i+0.5)*row_gap
+                cx = x + w/2
+                self.draw_symbol(cx, cy, dot_r, sep, b)
+            Color(0, 0, 0, 0.25)
+            Line(rounded_rectangle=(x, y, w, h, dp(5)), width=1)
+
+    FigureCard.redraw = redraw
+
+    def ensure_vocal_dir():
+        path = os.path.abspath(VOCAL_DIR)
+        if not os.path.exists(path):
+            os.makedirs(path, exist_ok=True)
+        return path
+
+    def safe_key_for_file(key):
+        return "".join(c if c.isalnum() else "_" for c in key)
+
+    def start_recording_v106(self, vocal_input=None):
+        if platform != "android":
+            self.message("Micro", "Enregistrement direct disponible sur Android uniquement pour l’instant.")
+            return
+        try:
+            from jnius import autoclass
+            MediaRecorder = autoclass("android.media.MediaRecorder")
+            AudioSource = autoclass("android.media.MediaRecorder$AudioSource")
+            OutputFormat = autoclass("android.media.MediaRecorder$OutputFormat")
+            AudioEncoder = autoclass("android.media.MediaRecorder$AudioEncoder")
+            folder = ensure_vocal_dir()
+            filepath = os.path.join(folder, "geostar_" + safe_key_for_file(self.current_key()) + "_" + str(int(time.time())) + ".m4a")
+            recorder = MediaRecorder()
+            recorder.setAudioSource(AudioSource.MIC)
+            recorder.setOutputFormat(OutputFormat.MPEG_4)
+            recorder.setAudioEncoder(AudioEncoder.AAC)
+            recorder.setOutputFile(filepath)
+            recorder.prepare()
+            recorder.start()
+            self._geostar_recorder = recorder
+            self._geostar_recording_path = filepath
+            if vocal_input is not None:
+                vocal_input.text = filepath
+            self.message("Micro", "Enregistrement commencé dans GEOSTAR.\nQuand tu as terminé, clique sur STOP VOCAL.")
+        except Exception as e:
+            self.message("Micro", "Impossible d’enregistrer directement.\nVérifie la permission Micro de Pydroid.\n\nErreur : " + str(e))
+
+    def stop_recording_v106(self, vocal_input=None):
+        rec = getattr(self, "_geostar_recorder", None)
+        path = getattr(self, "_geostar_recording_path", "")
+        if rec is None:
+            self.message("Micro", "Aucun enregistrement en cours.")
+            return
+        try:
+            rec.stop()
+            rec.release()
+        except Exception:
+            try:
+                rec.release()
+            except Exception:
+                pass
+        self._geostar_recorder = None
+        if vocal_input is not None and path:
+            vocal_input.text = path
+        self.message("Micro", "Mémo vocal enregistré :\n" + path + "\nClique sur ENREGISTRER pour l’attacher à la note.")
+
+    def play_vocal_v106(self, path):
+        if not path:
+            self.message("Vocal", "Aucun mémo vocal dans cette note.")
+            return
+        if not os.path.exists(path):
+            self.message("Vocal", "Fichier introuvable :\n" + path)
+            return
+        if platform == "android":
+            try:
+                from jnius import autoclass
+                MediaPlayer = autoclass("android.media.MediaPlayer")
+                player = MediaPlayer()
+                player.setDataSource(path)
+                player.prepare()
+                player.start()
+                self._geostar_player = player
+                self.message("Vocal", "Lecture du mémo vocal en cours.")
+                return
+            except Exception as e:
+                self.message("Vocal", "Impossible de lire le vocal.\n\n" + str(e))
+                return
+        self.message("Vocal", "Fichier vocal :\n" + path)
+
+    def delete_vocal_file_v106(self, vocal_input=None):
+        path = vocal_input.text.strip() if vocal_input is not None else ""
+        if path and os.path.exists(path):
+            try:
+                os.remove(path)
+            except Exception as e:
+                self.message("Vocal", "Impossible de supprimer le fichier.\n\n" + str(e))
+                return
+        if vocal_input is not None:
+            vocal_input.text = ""
+        self.message("Vocal", "Vocal supprimé. Clique sur ENREGISTRER pour sauvegarder.")
+
+    MoneyRoot.start_recording_v106 = start_recording_v106
+    MoneyRoot.stop_recording_v106 = stop_recording_v106
+    MoneyRoot.play_vocal_v106 = play_vocal_v106
+    MoneyRoot.delete_vocal_file_v106 = delete_vocal_file_v106
+
+    def popup_notes_current_v106(self):
+        existing = None
+        for n in self.notes:
+            if n.get("key") == self.current_key():
+                existing = n
+                break
+        box = BoxLayout(orientation="vertical", spacing=dp(6), padding=dp(8))
+        name = TextInput(hint_text="Nom de la note", multiline=False, text=existing.get("nom", "") if existing else "")
+        note = TextInput(hint_text="Note écrite", multiline=True, text=existing.get("note", "") if existing else "")
+        vocal = TextInput(hint_text="Mémo vocal GEOSTAR", multiline=False, text=existing.get("vocal", "") if existing else "")
+        box.add_widget(name); box.add_widget(note); box.add_widget(vocal)
+        row1 = BoxLayout(orientation="horizontal", size_hint=(1,None), height=dp(45), spacing=dp(5))
+        save_btn = Button(text="ENREGISTRER"); rec_btn = Button(text="REC VOCAL"); stop_btn = Button(text="STOP VOCAL")
+        row1.add_widget(save_btn); row1.add_widget(rec_btn); row1.add_widget(stop_btn); box.add_widget(row1)
+        row2 = BoxLayout(orientation="horizontal", size_hint=(1,None), height=dp(45), spacing=dp(5))
+        play_btn = Button(text="LIRE VOCAL"); del_vocal = Button(text="SUPPRIMER VOCAL"); del_note = Button(text="SUPPRIMER NOTE")
+        row2.add_widget(play_btn); row2.add_widget(del_vocal); row2.add_widget(del_note); box.add_widget(row2)
+        close_btn = Button(text="FERMER", size_hint=(1,None), height=dp(42)); box.add_widget(close_btn)
+        pop = Popup(title="NOTE du thème", content=box, size_hint=(0.94,0.88))
+
+        def save(_):
+            item = {
+                "key": self.current_key(),
+                "date": datetime.now().strftime("%d/%m/%Y %H:%M:%S"),
+                "nom": name.text.strip() or "Note sans nom",
+                "note": note.text.strip(),
+                "vocal": vocal.text.strip(),
+                "meres": self.mother_codes,
+                "maisons": {str(k): v for k, v in self.h.items()},
+            }
+            found = False
+            for i, n in enumerate(self.notes):
+                if n.get("key") == item["key"]:
+                    self.notes[i] = item; found = True; break
+            if not found:
+                self.notes.append(item)
+            write_json(NOTES_FILE, self.notes)
+            self.message("NOTE", "Note enregistrée.")
+
+        def delete_note(_):
+            v = vocal.text.strip()
+            if v and os.path.exists(v):
+                try: os.remove(v)
+                except Exception: pass
+            self.notes = [n for n in self.notes if n.get("key") != self.current_key()]
+            write_json(NOTES_FILE, self.notes)
+            pop.dismiss()
+            self.message("NOTE", "Note supprimée.")
+
+        save_btn.bind(on_release=save)
+        rec_btn.bind(on_release=lambda x: self.start_recording_v106(vocal))
+        stop_btn.bind(on_release=lambda x: self.stop_recording_v106(vocal))
+        play_btn.bind(on_release=lambda x: self.play_vocal_v106(vocal.text.strip()))
+        del_vocal.bind(on_release=lambda x: self.delete_vocal_file_v106(vocal))
+        del_note.bind(on_release=delete_note)
+        close_btn.bind(on_release=lambda x: pop.dismiss())
+        pop.open()
+
+    MoneyRoot.popup_notes_current = popup_notes_current_v106
+
+_geostar_v106_patch()
+
+
+
+# ============================================================
+# GEOSTAR V10.6.1 - CORRECTION CRASH ADD_CARD
+# ============================================================
+
+def _geostar_v1061_patch():
+
+    def add_card_flexible(self, maison, bits, rx, ry, rw, rh, repeated=False, *args, **kwargs):
+        card = FigureCard(
+            maison=maison,
+            bits=bits,
+            root=self,
+            repeated=repeated,
+            size_hint=(rw, rh),
+            pos_hint={"x": rx, "y": ry}
+        )
+
+        label = Label(
+            text=f"[b]M{maison}[/b]",
+            markup=True,
+            color=(1, 0.86, 0.05, 1),
+            font_size=dp(14),
+            size_hint=(rw, None),
+            height=dp(22),
+            pos_hint={"x": rx, "y": ry + rh}
+        )
+
+        self.board.add_widget(label)
+        self.board.add_widget(card)
+        self.cards[maison] = card
+        self.labels[maison] = label
+
+    MoneyRoot.add_card = add_card_flexible
+
+    def afficher_theme_flexible(self, h):
+        self.h = h
+        self.board.clear_widgets()
+        self.cards = {}
+        self.labels = {}
+
+        reps = analyser_repetitions(self.h)
+        repeated = set()
+        for bits, maisons in reps.items():
+            if len(maisons) >= 2:
+                for m in maisons:
+                    repeated.add(m)
+
+        for maison, pos in self.maison_positions().items():
+            rx, ry, rw, rh = pos
+            self.add_card(maison, h[maison], rx, ry, rw, rh, repeated=(maison in repeated))
+
+        self.title.text = "[b]GEOSTAR[/b]\n" + datetime.now().strftime("%d/%m/%Y %H:%M:%S")
+        self.mettre_infos()
+
+    MoneyRoot.afficher_theme = afficher_theme_flexible
+
+_geostar_v1061_patch()
+
+
+
+# ============================================================
+# GEOSTAR V10.7 - VOCAUX MODE FIABLE Pydroid
+# ============================================================
+# Pydroid bloque souvent MediaRecorder direct.
+# Cette version utilise :
+# - OUVRIR ENREGISTREUR : ouvre l'app Android d'enregistrement.
+# - CHOISIR VOCAL : ouvre le sélecteur de fichiers audio.
+# - LIRE VOCAL : lit le vocal choisi.
+# - SUPPRIMER VOCAL : supprime le fichier si Android/Pydroid autorise.
+# ============================================================
+
+def _geostar_v107_patch():
+
+    def open_android_recorder_v107(self):
+        if platform != "android":
+            self.message("Micro", "Sur iPhone/Web, utilise Dictaphone puis indique le fichier vocal.")
+            return
+
+        try:
+            from jnius import autoclass
+            Intent = autoclass("android.content.Intent")
+            PythonActivity = autoclass("org.kivy.android.PythonActivity")
+
+            intent = Intent("android.provider.MediaStore.RECORD_SOUND")
+            PythonActivity.mActivity.startActivity(intent)
+
+            self.message(
+                "Micro",
+                "L'enregistreur Android est ouvert.\n\n"
+                "1. Enregistre ton mémo.\n"
+                "2. Reviens dans GEOSTAR.\n"
+                "3. Clique sur CHOISIR VOCAL pour l'attacher à la note."
+            )
+        except Exception as e:
+            self.message(
+                "Micro",
+                "Impossible d'ouvrir l'enregistreur Android.\n\n"
+                "Utilise l'application Enregistreur vocal manuellement, puis reviens dans GEOSTAR.\n\n"
+                + str(e)
+            )
+
+    def choose_vocal_v107(self, vocal_input):
+        if platform != "android":
+            self.message("Vocal", "Sélection de fichier disponible surtout sur Android/Pydroid.")
+            return
+
+        try:
+            from androidstorage4kivy import SharedStorage
+            from plyer import filechooser
+
+            def callback(selection):
+                if selection:
+                    vocal_input.text = selection[0]
+                    self.message("Vocal", "Vocal sélectionné :\n" + selection[0] + "\n\nClique sur ENREGISTRER pour sauvegarder la note.")
+
+            filechooser.open_file(
+                title="Choisir un mémo vocal",
+                filters=[("Audio", "*.aac", "*.m4a", "*.mp3", "*.wav", "*.3gp", "*.ogg")],
+                on_selection=callback
+            )
+            return
+        except Exception:
+            pass
+
+        try:
+            from plyer import filechooser
+
+            def callback(selection):
+                if selection:
+                    vocal_input.text = selection[0]
+                    self.message("Vocal", "Vocal sélectionné :\n" + selection[0] + "\n\nClique sur ENREGISTRER pour sauvegarder la note.")
+
+            filechooser.open_file(
+                title="Choisir un mémo vocal",
+                filters=["*.aac", "*.m4a", "*.mp3", "*.wav", "*.3gp", "*.ogg"],
+                on_selection=callback
+            )
+            return
+        except Exception as e:
+            self.message(
+                "Vocal",
+                "Le sélecteur de fichier n'est pas disponible dans cette version de Pydroid.\n\n"
+                "Solution : copie le nom/chemin du fichier vocal dans le champ vocal.\n\n"
+                + str(e)
+            )
+
+    def play_vocal_v107(self, path):
+        path = path.strip()
+        if not path:
+            self.message("Vocal", "Aucun mémo vocal attaché à cette note.")
+            return
+
+        if platform == "android":
+            try:
+                from jnius import autoclass
+                Intent = autoclass("android.content.Intent")
+                Uri = autoclass("android.net.Uri")
+                File = autoclass("java.io.File")
+                PythonActivity = autoclass("org.kivy.android.PythonActivity")
+
+                intent = Intent(Intent.ACTION_VIEW)
+
+                if path.startswith("content://"):
+                    uri = Uri.parse(path)
+                else:
+                    uri = Uri.fromFile(File(path))
+
+                intent.setDataAndType(uri, "audio/*")
+                intent.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+                PythonActivity.mActivity.startActivity(intent)
+                return
+            except Exception as e:
+                self.message("Vocal", "Impossible de lire automatiquement ce vocal.\n\nChemin :\n" + path + "\n\nErreur : " + str(e))
+                return
+
+        self.message("Vocal", "Fichier vocal attaché :\n" + path)
+
+    def delete_vocal_v107(self, vocal_input):
+        path = vocal_input.text.strip()
+        if not path:
+            self.message("Vocal", "Aucun vocal à supprimer.")
+            return
+
+        # Les URI content:// ne peuvent souvent pas être supprimées par Pydroid.
+        if path.startswith("content://"):
+            vocal_input.text = ""
+            self.message(
+                "Vocal",
+                "Le lien vocal a été retiré de la note.\n\n"
+                "Android ne permet pas toujours à Pydroid de supprimer directement un fichier content://.\n"
+                "Supprime le fichier depuis l'application Enregistreur vocal si nécessaire.\n\n"
+                "Clique sur ENREGISTRER pour sauvegarder."
+            )
+            return
+
+        try:
+            if os.path.exists(path):
+                os.remove(path)
+            vocal_input.text = ""
+            self.message("Vocal", "Vocal supprimé. Clique sur ENREGISTRER pour sauvegarder.")
+        except Exception as e:
+            vocal_input.text = ""
+            self.message(
+                "Vocal",
+                "Le lien vocal a été retiré de la note, mais le fichier n'a pas pu être supprimé.\n\n"
+                "Erreur : " + str(e) + "\n\nClique sur ENREGISTRER."
+            )
+
+    MoneyRoot.open_android_recorder_v107 = open_android_recorder_v107
+    MoneyRoot.choose_vocal_v107 = choose_vocal_v107
+    MoneyRoot.play_vocal_v107 = play_vocal_v107
+    MoneyRoot.delete_vocal_v107 = delete_vocal_v107
+
+    def popup_notes_current_v107(self):
+        existing = None
+        for n in self.notes:
+            if n.get("key") == self.current_key():
+                existing = n
+                break
+
+        box = BoxLayout(orientation="vertical", spacing=dp(6), padding=dp(8))
+
+        name = TextInput(
+            hint_text="Nom de la note",
+            multiline=False,
+            text=existing.get("nom", "") if existing else ""
+        )
+        note = TextInput(
+            hint_text="Note écrite",
+            multiline=True,
+            text=existing.get("note", "") if existing else ""
+        )
+        vocal = TextInput(
+            hint_text="Mémo vocal attaché",
+            multiline=False,
+            text=existing.get("vocal", "") if existing else ""
+        )
+
+        box.add_widget(name)
+        box.add_widget(note)
+        box.add_widget(vocal)
+
+        row1 = BoxLayout(orientation="horizontal", size_hint=(1,None), height=dp(45), spacing=dp(5))
+        save_btn = Button(text="ENREGISTRER")
+        record_btn = Button(text="OUVRIR ENREGISTREUR")
+        choose_btn = Button(text="CHOISIR VOCAL")
+        row1.add_widget(save_btn)
+        row1.add_widget(record_btn)
+        row1.add_widget(choose_btn)
+        box.add_widget(row1)
+
+        row2 = BoxLayout(orientation="horizontal", size_hint=(1,None), height=dp(45), spacing=dp(5))
+        play_btn = Button(text="LIRE VOCAL")
+        delete_vocal_btn = Button(text="SUPPRIMER VOCAL")
+        delete_note_btn = Button(text="SUPPRIMER NOTE")
+        row2.add_widget(play_btn)
+        row2.add_widget(delete_vocal_btn)
+        row2.add_widget(delete_note_btn)
+        box.add_widget(row2)
+
+        close_btn = Button(text="FERMER", size_hint=(1,None), height=dp(42))
+        box.add_widget(close_btn)
+
+        pop = Popup(title="NOTE du thème", content=box, size_hint=(0.96,0.88))
+
+        def save(_):
+            item = {
+                "key": self.current_key(),
+                "date": datetime.now().strftime("%d/%m/%Y %H:%M:%S"),
+                "nom": name.text.strip() or "Note sans nom",
+                "note": note.text.strip(),
+                "vocal": vocal.text.strip(),
+                "meres": self.mother_codes,
+                "maisons": {str(k): v for k, v in self.h.items()},
+            }
+
+            found = False
+            for i, n in enumerate(self.notes):
+                if n.get("key") == item["key"]:
+                    self.notes[i] = item
+                    found = True
+                    break
+            if not found:
+                self.notes.append(item)
+
+            write_json(NOTES_FILE, self.notes)
+            self.message("NOTE", "Note enregistrée.")
+
+        def delete_note(_):
+            # On retire la note. Le vocal attaché est supprimé seulement si fichier direct accessible.
+            path = vocal.text.strip()
+            if path and not path.startswith("content://") and os.path.exists(path):
+                try:
+                    os.remove(path)
+                except Exception:
+                    pass
+
+            self.notes = [n for n in self.notes if n.get("key") != self.current_key()]
+            write_json(NOTES_FILE, self.notes)
+            pop.dismiss()
+            self.message("NOTE", "Note supprimée.")
+
+        save_btn.bind(on_release=save)
+        record_btn.bind(on_release=lambda x: self.open_android_recorder_v107())
+        choose_btn.bind(on_release=lambda x: self.choose_vocal_v107(vocal))
+        play_btn.bind(on_release=lambda x: self.play_vocal_v107(vocal.text))
+        delete_vocal_btn.bind(on_release=lambda x: self.delete_vocal_v107(vocal))
+        delete_note_btn.bind(on_release=delete_note)
+        close_btn.bind(on_release=lambda x: pop.dismiss())
+
+        pop.open()
+
+    MoneyRoot.popup_notes_current = popup_notes_current_v107
+
+_geostar_v107_patch()
+
+
+
+# ============================================================
+# GEOSTAR V10.8 - SELECTEUR VOCAL ANDROID SANS PLYER
+# ============================================================
+# Corrige : No module named plyer
+# Utilise Intent ACTION_GET_CONTENT + android.activity.bind
+# ============================================================
+
+def _geostar_v108_patch():
+
+    def choose_vocal_native_v108(self, vocal_input):
+        if platform != "android":
+            self.message("Vocal", "Sélection vocale native disponible sur Android.")
+            return
+
+        try:
+            from jnius import autoclass
+            from android import activity
+
+            Intent = autoclass("android.content.Intent")
+            PythonActivity = autoclass("org.kivy.android.PythonActivity")
+
+            self._geostar_pending_vocal_input = vocal_input
+
+            def on_activity_result(requestCode, resultCode, intent):
+                try:
+                    if requestCode != 8808:
+                        return
+
+                    activity.unbind(on_activity_result=on_activity_result)
+
+                    if intent is None:
+                        self.message("Vocal", "Aucun vocal sélectionné.")
+                        return
+
+                    uri = intent.getData()
+                    if uri is None:
+                        self.message("Vocal", "Aucun vocal sélectionné.")
+                        return
+
+                    uri_text = uri.toString()
+                    self._geostar_pending_vocal_input.text = uri_text
+
+                    self.message(
+                        "Vocal",
+                        "Vocal attaché à la note :\n" + uri_text + "\n\nClique sur ENREGISTRER pour sauvegarder."
+                    )
+
+                except Exception as e:
+                    self.message("Vocal", "Erreur pendant la sélection :\n" + str(e))
+
+            activity.bind(on_activity_result=on_activity_result)
+
+            intent = Intent(Intent.ACTION_GET_CONTENT)
+            intent.setType("audio/*")
+            intent.addCategory(Intent.CATEGORY_OPENABLE)
+            PythonActivity.mActivity.startActivityForResult(intent, 8808)
+
+        except Exception as e:
+            self.message(
+                "Vocal",
+                "Impossible d'ouvrir le sélecteur vocal Android.\n\n"
+                "Tu peux quand même copier/coller le chemin ou le lien du fichier vocal dans le champ.\n\n"
+                "Erreur : " + str(e)
+            )
+
+    def play_vocal_native_v108(self, path):
+        path = path.strip()
+        if not path:
+            self.message("Vocal", "Aucun vocal attaché à cette note.")
+            return
+
+        if platform == "android":
+            try:
+                from jnius import autoclass
+                Intent = autoclass("android.content.Intent")
+                Uri = autoclass("android.net.Uri")
+                File = autoclass("java.io.File")
+                PythonActivity = autoclass("org.kivy.android.PythonActivity")
+
+                intent = Intent(Intent.ACTION_VIEW)
+
+                if path.startswith("content://"):
+                    uri = Uri.parse(path)
+                else:
+                    uri = Uri.fromFile(File(path))
+
+                intent.setDataAndType(uri, "audio/*")
+                intent.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+                PythonActivity.mActivity.startActivity(intent)
+                return
+
+            except Exception as e:
+                self.message("Vocal", "Impossible de lire ce vocal.\n\n" + str(e))
+                return
+
+        self.message("Vocal", "Vocal :\n" + path)
+
+    def delete_vocal_native_v108(self, vocal_input):
+        path = vocal_input.text.strip()
+        if not path:
+            self.message("Vocal", "Aucun vocal attaché.")
+            return
+
+        # Sur Android content://, on retire le lien de la note.
+        # La suppression physique se fait dans l'app enregistreur.
+        if path.startswith("content://"):
+            vocal_input.text = ""
+            self.message(
+                "Vocal",
+                "Le vocal a été retiré de la note.\n\n"
+                "Si tu veux supprimer le fichier lui-même, fais-le depuis l'application Enregistreur vocal.\n\n"
+                "Clique sur ENREGISTRER pour sauvegarder."
+            )
+            return
+
+        try:
+            if os.path.exists(path):
+                os.remove(path)
+            vocal_input.text = ""
+            self.message("Vocal", "Vocal supprimé. Clique sur ENREGISTRER pour sauvegarder.")
+        except Exception as e:
+            vocal_input.text = ""
+            self.message(
+                "Vocal",
+                "Le vocal a été retiré de la note, mais Android n'a pas autorisé la suppression du fichier.\n\n"
+                "Erreur : " + str(e) + "\n\nClique sur ENREGISTRER."
+            )
+
+    MoneyRoot.choose_vocal_v107 = choose_vocal_native_v108
+    MoneyRoot.play_vocal_v107 = play_vocal_native_v108
+    MoneyRoot.delete_vocal_v107 = delete_vocal_native_v108
+
+    # Si la version précédente utilisait encore ces noms :
+    MoneyRoot.choose_vocal_v108 = choose_vocal_native_v108
+    MoneyRoot.play_vocal_v108 = play_vocal_native_v108
+    MoneyRoot.delete_vocal_v108 = delete_vocal_native_v108
+
+_geostar_v108_patch()
+
+
+
+# ============================================================
+# GEOSTAR V10.9 - VOCAUX PAR SCAN DOSSIERS TABLETTE
+# ============================================================
+# Pydroid bloque :
+# - MediaRecorder direct
+# - plyer
+# - retour du sélecteur Android
+#
+# Solution fiable :
+# - Tu enregistres avec l'application Enregistreur vocal Android.
+# - GEOSTAR scanne les dossiers de la tablette.
+# - Tu cliques sur un fichier vocal trouvé.
+# - Il est attaché à la note.
+# - LIRE VOCAL ouvre le fichier.
+# - SUPPRIMER VOCAL retire le lien et tente de supprimer le fichier.
+# ============================================================
+
+def _geostar_v109_patch():
+
+    AUDIO_EXTENSIONS = (".aac", ".m4a", ".mp3", ".wav", ".3gp", ".ogg", ".amr")
+
+    def vocal_search_dirs():
+        base_dirs = [
+            "/storage/emulated/0/Recordings",
+            "/storage/emulated/0/Recording",
+            "/storage/emulated/0/Recorder",
+            "/storage/emulated/0/Sounds",
+            "/storage/emulated/0/SoundRecorder",
+            "/storage/emulated/0/Music",
+            "/storage/emulated/0/Download",
+            "/storage/emulated/0/Downloads",
+            "/storage/emulated/0/Documents",
+            "/sdcard/Recordings",
+            "/sdcard/Recording",
+            "/sdcard/Sounds",
+            "/sdcard/Music",
+            "/sdcard/Download",
+        ]
+        return base_dirs
+
+    def scan_audio_files_v109(self, limit=200):
+        found = []
+        seen = set()
+
+        for folder in vocal_search_dirs():
+            if not os.path.exists(folder):
+                continue
+
+            try:
+                for root, dirs, files in os.walk(folder):
+                    # évite les scans trop profonds
+                    depth = root.replace(folder, "").count(os.sep)
+                    if depth > 3:
+                        dirs[:] = []
+                        continue
+
+                    for name in files:
+                        if name.lower().endswith(AUDIO_EXTENSIONS):
+                            path = os.path.join(root, name)
+                            if path not in seen:
+                                seen.add(path)
+                                found.append(path)
+
+                        if len(found) >= limit:
+                            return found
+            except Exception:
+                pass
+
+        # Ajoute aussi les vocaux déjà enregistrés dans les notes
+        try:
+            for n in self.notes:
+                v = n.get("vocal", "")
+                if v and v not in seen:
+                    seen.add(v)
+                    found.append(v)
+        except Exception:
+            pass
+
+        return found
+
+    def open_android_recorder_v109(self):
+        if platform != "android":
+            self.message("Micro", "Sur iPhone/Web, utilise Dictaphone puis indique le nom du fichier.")
+            return
+
+        try:
+            from jnius import autoclass
+            Intent = autoclass("android.content.Intent")
+            PythonActivity = autoclass("org.kivy.android.PythonActivity")
+
+            intent = Intent("android.provider.MediaStore.RECORD_SOUND")
+            PythonActivity.mActivity.startActivity(intent)
+
+            self.message(
+                "Micro",
+                "L'enregistreur vocal Android est ouvert.\n\n"
+                "Après avoir enregistré :\n"
+                "1. Reviens dans GEOSTAR.\n"
+                "2. Clique sur LISTE VOCAUX.\n"
+                "3. Choisis le fichier vocal."
+            )
+        except Exception:
+            self.message(
+                "Micro",
+                "Ouvre manuellement ton application Enregistreur vocal Android.\n\n"
+                "Après l'enregistrement, reviens dans GEOSTAR puis clique sur LISTE VOCAUX."
+            )
+
+    def popup_vocal_list_v109(self, vocal_input):
+        files = scan_audio_files_v109(self)
+
+        content = BoxLayout(orientation="vertical", spacing=dp(6), padding=dp(8))
+
+        content.add_widget(Label(
+            text=f"Vocaux trouvés : {len(files)}\nClique sur un vocal pour l'attacher à la note.",
+            color=(1,1,1,1),
+            size_hint=(1,None),
+            height=dp(55)
+        ))
+
+        sv = ScrollView()
+        grid = GridLayout(cols=1, spacing=dp(4), size_hint_y=None)
+        grid.bind(minimum_height=grid.setter("height"))
+        sv.add_widget(grid)
+        content.add_widget(sv)
+
+        if not files:
+            grid.add_widget(Label(
+                text="Aucun fichier vocal trouvé.\nEssaie d'enregistrer un vocal avec l'app Enregistreur vocal, puis reviens ici.",
+                color=(1,1,1,1),
+                size_hint_y=None,
+                height=dp(90)
+            ))
+
+        for path in files:
+            short = os.path.basename(path)
+            folder = os.path.dirname(path)
+            txt = short + "\n" + folder
+
+            b = Button(text=txt, font_size=dp(10), size_hint_y=None, height=dp(58))
+
+            def choose(btn, p=path):
+                vocal_input.text = p
+                pop.dismiss()
+                self.message(
+                    "Vocal",
+                    "Vocal attaché :\n" + p + "\n\nClique sur ENREGISTRER pour sauvegarder la note."
+                )
+
+            b.bind(on_release=choose)
+            grid.add_widget(b)
+
+        manual = Button(text="ENTRER CHEMIN MANUELLEMENT", size_hint=(1,None), height=dp(42))
+        content.add_widget(manual)
+
+        close = Button(text="FERMER", size_hint=(1,None), height=dp(42))
+        content.add_widget(close)
+
+        pop = Popup(title="Liste des vocaux", content=content, size_hint=(0.96,0.90))
+
+        def manual_entry(_):
+            pop.dismiss()
+            self.message(
+                "Chemin vocal",
+                "Copie le chemin ou le nom du fichier vocal dans le champ vocal de la note.\n\n"
+                "Exemple : /storage/emulated/0/Recordings/20260520-182859.aac"
+            )
+
+        manual.bind(on_release=manual_entry)
+        close.bind(on_release=lambda x: pop.dismiss())
+        pop.open()
+
+    def play_vocal_v109(self, path):
+        path = path.strip()
+        if not path:
+            self.message("Vocal", "Aucun vocal attaché à cette note.")
+            return
+
+        if not os.path.exists(path):
+            self.message(
+                "Vocal",
+                "Le fichier vocal est introuvable.\n\n"
+                "Chemin enregistré :\n" + path + "\n\n"
+                "Clique sur LISTE VOCAUX pour rattacher le bon fichier."
+            )
+            return
+
+        if platform == "android":
+            try:
+                from jnius import autoclass
+                Intent = autoclass("android.content.Intent")
+                Uri = autoclass("android.net.Uri")
+                File = autoclass("java.io.File")
+                PythonActivity = autoclass("org.kivy.android.PythonActivity")
+
+                intent = Intent(Intent.ACTION_VIEW)
+                uri = Uri.fromFile(File(path))
+                intent.setDataAndType(uri, "audio/*")
+                PythonActivity.mActivity.startActivity(intent)
+                return
+            except Exception as e:
+                self.message("Vocal", "Impossible de lire automatiquement.\n\n" + str(e))
+                return
+
+        self.message("Vocal", "Fichier vocal :\n" + path)
+
+    def delete_vocal_v109(self, vocal_input):
+        path = vocal_input.text.strip()
+
+        if not path:
+            self.message("Vocal", "Aucun vocal à supprimer.")
+            return
+
+        deleted_file = False
+
+        try:
+            if os.path.exists(path):
+                os.remove(path)
+                deleted_file = True
+        except Exception:
+            deleted_file = False
+
+        vocal_input.text = ""
+
+        if deleted_file:
+            self.message(
+                "Vocal",
+                "Le fichier vocal a été supprimé et retiré de la note.\n\nClique sur ENREGISTRER."
+            )
+        else:
+            self.message(
+                "Vocal",
+                "Le vocal a été retiré de la note.\n\n"
+                "Android n'a pas autorisé la suppression physique du fichier, "
+                "ou le fichier était déjà introuvable.\n\nClique sur ENREGISTRER."
+            )
+
+    def popup_notes_current_v109(self):
+        existing = None
+        for n in self.notes:
+            if n.get("key") == self.current_key():
+                existing = n
+                break
+
+        box = BoxLayout(orientation="vertical", spacing=dp(6), padding=dp(8))
+
+        name = TextInput(
+            hint_text="Nom de la note",
+            multiline=False,
+            text=existing.get("nom", "") if existing else ""
+        )
+        note = TextInput(
+            hint_text="Note écrite",
+            multiline=True,
+            text=existing.get("note", "") if existing else ""
+        )
+        vocal = TextInput(
+            hint_text="Mémo vocal attaché",
+            multiline=False,
+            text=existing.get("vocal", "") if existing else ""
+        )
+
+        box.add_widget(name)
+        box.add_widget(note)
+        box.add_widget(vocal)
+
+        row1 = BoxLayout(orientation="horizontal", size_hint=(1,None), height=dp(45), spacing=dp(5))
+        save_btn = Button(text="ENREGISTRER")
+        record_btn = Button(text="OUVRIR ENREGISTREUR")
+        list_btn = Button(text="LISTE VOCAUX")
+        row1.add_widget(save_btn)
+        row1.add_widget(record_btn)
+        row1.add_widget(list_btn)
+        box.add_widget(row1)
+
+        row2 = BoxLayout(orientation="horizontal", size_hint=(1,None), height=dp(45), spacing=dp(5))
+        play_btn = Button(text="LIRE VOCAL")
+        delete_vocal_btn = Button(text="SUPPRIMER VOCAL")
+        delete_note_btn = Button(text="SUPPRIMER NOTE")
+        row2.add_widget(play_btn)
+        row2.add_widget(delete_vocal_btn)
+        row2.add_widget(delete_note_btn)
+        box.add_widget(row2)
+
+        close_btn = Button(text="FERMER", size_hint=(1,None), height=dp(42))
+        box.add_widget(close_btn)
+
+        pop = Popup(title="NOTE du thème", content=box, size_hint=(0.96,0.88))
+
+        def save(_):
+            item = {
+                "key": self.current_key(),
+                "date": datetime.now().strftime("%d/%m/%Y %H:%M:%S"),
+                "nom": name.text.strip() or "Note sans nom",
+                "note": note.text.strip(),
+                "vocal": vocal.text.strip(),
+                "meres": self.mother_codes,
+                "maisons": {str(k): v for k, v in self.h.items()},
+            }
+
+            found = False
+            for i, n in enumerate(self.notes):
+                if n.get("key") == item["key"]:
+                    self.notes[i] = item
+                    found = True
+                    break
+
+            if not found:
+                self.notes.append(item)
+
+            write_json(NOTES_FILE, self.notes)
+            self.message("NOTE", "Note enregistrée.")
+
+        def delete_note(_):
+            # Supprime la note mais ne supprime pas forcément le fichier vocal
+            # sauf si Android autorise.
+            path = vocal.text.strip()
+            try:
+                if path and os.path.exists(path):
+                    os.remove(path)
+            except Exception:
+                pass
+
+            self.notes = [n for n in self.notes if n.get("key") != self.current_key()]
+            write_json(NOTES_FILE, self.notes)
+            pop.dismiss()
+            self.message("NOTE", "Note supprimée.")
+
+        save_btn.bind(on_release=save)
+        record_btn.bind(on_release=lambda x: open_android_recorder_v109(self))
+        list_btn.bind(on_release=lambda x: popup_vocal_list_v109(self, vocal))
+        play_btn.bind(on_release=lambda x: play_vocal_v109(self, vocal.text))
+        delete_vocal_btn.bind(on_release=lambda x: delete_vocal_v109(self, vocal))
+        delete_note_btn.bind(on_release=delete_note)
+        close_btn.bind(on_release=lambda x: pop.dismiss())
+
+        pop.open()
+
+    MoneyRoot.popup_notes_current = popup_notes_current_v109
+
+_geostar_v109_patch()
+
+
+
+# ============================================================
+# GEOSTAR V10.9.1 - FIX LECTURE VOCALE FILEURIEXPOSED
+# ============================================================
+# Corrige : FileUriExposedException
+# La lecture vocale utilise maintenant MediaPlayer directement.
+# ============================================================
+
+def _geostar_v1091_patch():
+
+    def play_vocal_internal_v1091(self, path):
+        path = path.strip()
+
+        if not path:
+            self.message("Vocal", "Aucun vocal attaché à cette note.")
+            return
+
+        if not os.path.exists(path):
+            self.message(
+                "Vocal",
+                "Le fichier vocal est introuvable :\n" + path + "\n\n"
+                "Clique sur LISTE VOCAUX pour rattacher le bon fichier."
+            )
+            return
+
+        if platform == "android":
+            try:
+                from jnius import autoclass
+
+                # Arrête l'ancien lecteur si besoin.
+                old_player = getattr(self, "_geostar_player", None)
+                if old_player is not None:
+                    try:
+                        old_player.stop()
+                        old_player.release()
+                    except Exception:
+                        pass
+
+                MediaPlayer = autoclass("android.media.MediaPlayer")
+                player = MediaPlayer()
+                player.setDataSource(path)
+                player.prepare()
+                player.start()
+
+                self._geostar_player = player
+                self.message("Vocal", "Lecture du mémo vocal en cours.\n\n" + path)
+                return
+
+            except Exception as e:
+                self.message(
+                    "Vocal",
+                    "Impossible de lire le vocal avec le lecteur interne.\n\n"
+                    "Chemin :\n" + path + "\n\nErreur : " + str(e)
+                )
+                return
+
+        self.message("Vocal", "Vocal attaché :\n" + path)
+
+    def stop_vocal_internal_v1091(self):
+        player = getattr(self, "_geostar_player", None)
+
+        if player is None:
+            self.message("Vocal", "Aucune lecture vocale en cours.")
+            return
+
+        try:
+            player.stop()
+            player.release()
+        except Exception:
+            pass
+
+        self._geostar_player = None
+        self.message("Vocal", "Lecture vocale arrêtée.")
+
+    MoneyRoot.play_vocal_v109 = play_vocal_internal_v1091
+    MoneyRoot.stop_vocal_internal_v1091 = stop_vocal_internal_v1091
+
+    def popup_notes_current_v1091(self):
+        existing = None
+        for n in self.notes:
+            if n.get("key") == self.current_key():
+                existing = n
+                break
+
+        box = BoxLayout(orientation="vertical", spacing=dp(6), padding=dp(8))
+
+        name = TextInput(
+            hint_text="Nom de la note",
+            multiline=False,
+            text=existing.get("nom", "") if existing else ""
+        )
+        note = TextInput(
+            hint_text="Note écrite",
+            multiline=True,
+            text=existing.get("note", "") if existing else ""
+        )
+        vocal = TextInput(
+            hint_text="Mémo vocal attaché",
+            multiline=False,
+            text=existing.get("vocal", "") if existing else ""
+        )
+
+        box.add_widget(name)
+        box.add_widget(note)
+        box.add_widget(vocal)
+
+        row1 = BoxLayout(orientation="horizontal", size_hint=(1,None), height=dp(45), spacing=dp(5))
+        save_btn = Button(text="ENREGISTRER")
+        record_btn = Button(text="OUVRIR ENREGISTREUR")
+        list_btn = Button(text="LISTE VOCAUX")
+        row1.add_widget(save_btn)
+        row1.add_widget(record_btn)
+        row1.add_widget(list_btn)
+        box.add_widget(row1)
+
+        row2 = BoxLayout(orientation="horizontal", size_hint=(1,None), height=dp(45), spacing=dp(5))
+        play_btn = Button(text="LIRE VOCAL")
+        stop_btn = Button(text="STOP LECTURE")
+        delete_vocal_btn = Button(text="SUPPRIMER VOCAL")
+        row2.add_widget(play_btn)
+        row2.add_widget(stop_btn)
+        row2.add_widget(delete_vocal_btn)
+        box.add_widget(row2)
+
+        row3 = BoxLayout(orientation="horizontal", size_hint=(1,None), height=dp(45), spacing=dp(5))
+        delete_note_btn = Button(text="SUPPRIMER NOTE")
+        close_btn = Button(text="FERMER")
+        row3.add_widget(delete_note_btn)
+        row3.add_widget(close_btn)
+        box.add_widget(row3)
+
+        pop = Popup(title="NOTE du thème", content=box, size_hint=(0.96,0.88))
+
+        def save(_):
+            item = {
+                "key": self.current_key(),
+                "date": datetime.now().strftime("%d/%m/%Y %H:%M:%S"),
+                "nom": name.text.strip() or "Note sans nom",
+                "note": note.text.strip(),
+                "vocal": vocal.text.strip(),
+                "meres": self.mother_codes,
+                "maisons": {str(k): v for k, v in self.h.items()},
+            }
+
+            found = False
+            for i, n in enumerate(self.notes):
+                if n.get("key") == item["key"]:
+                    self.notes[i] = item
+                    found = True
+                    break
+
+            if not found:
+                self.notes.append(item)
+
+            write_json(NOTES_FILE, self.notes)
+            self.message("NOTE", "Note enregistrée.")
+
+        def delete_note(_):
+            path = vocal.text.strip()
+            try:
+                if path and os.path.exists(path):
+                    os.remove(path)
+            except Exception:
+                pass
+
+            self.notes = [n for n in self.notes if n.get("key") != self.current_key()]
+            write_json(NOTES_FILE, self.notes)
+            pop.dismiss()
+            self.message("NOTE", "Note supprimée.")
+
+        save_btn.bind(on_release=save)
+        record_btn.bind(on_release=lambda x: open_android_recorder_v109(self))
+        list_btn.bind(on_release=lambda x: popup_vocal_list_v109(self, vocal))
+        play_btn.bind(on_release=lambda x: self.play_vocal_v109(vocal.text))
+        stop_btn.bind(on_release=lambda x: self.stop_vocal_internal_v1091())
+        delete_vocal_btn.bind(on_release=lambda x: delete_vocal_v109(self, vocal))
+        delete_note_btn.bind(on_release=delete_note)
+        close_btn.bind(on_release=lambda x: pop.dismiss())
+
+        pop.open()
+
+    MoneyRoot.popup_notes_current = popup_notes_current_v1091
+
+_geostar_v1091_patch()
+
+
+
+# ============================================================
+# GEOSTAR V10.9.2 - FIX LISTE VOCAUX NAMEERROR
+# ============================================================
+
+def _geostar_v1092_patch():
+
+    AUDIO_EXTENSIONS_V1092 = (".aac", ".m4a", ".mp3", ".wav", ".3gp", ".ogg", ".amr")
+
+    def scan_audio_files_v1092(self, limit=300):
+        folders = [
+            "/storage/emulated/0/Music/recordings",
+            "/storage/emulated/0/Music/Recordings",
+            "/storage/emulated/0/Recordings",
+            "/storage/emulated/0/Recording",
+            "/storage/emulated/0/Recorder",
+            "/storage/emulated/0/Sounds",
+            "/storage/emulated/0/SoundRecorder",
+            "/storage/emulated/0/Music",
+            "/storage/emulated/0/Download",
+            "/storage/emulated/0/Downloads",
+            "/storage/emulated/0/Documents",
+            "/sdcard/Music/recordings",
+            "/sdcard/Recordings",
+            "/sdcard/Download",
+        ]
+
+        found = []
+        seen = set()
+
+        for folder in folders:
+            if not os.path.exists(folder):
+                continue
+
+            try:
+                for root, dirs, files in os.walk(folder):
+                    depth = root.replace(folder, "").count(os.sep)
+                    if depth > 4:
+                        dirs[:] = []
+                        continue
+
+                    for name in files:
+                        if name.lower().endswith(AUDIO_EXTENSIONS_V1092):
+                            path = os.path.join(root, name)
+                            if path not in seen:
+                                seen.add(path)
+                                found.append(path)
+
+                        if len(found) >= limit:
+                            return found
+            except Exception:
+                pass
+
+        try:
+            for n in self.notes:
+                v = n.get("vocal", "")
+                if v and v not in seen:
+                    seen.add(v)
+                    found.append(v)
+        except Exception:
+            pass
+
+        # Les plus récents en premier si possible
+        try:
+            found.sort(key=lambda p: os.path.getmtime(p) if os.path.exists(p) else 0, reverse=True)
+        except Exception:
+            pass
+
+        return found
+
+    def popup_vocal_list_v1092(self, vocal_input):
+        files = self.scan_audio_files_v1092()
+
+        content = BoxLayout(orientation="vertical", spacing=dp(6), padding=dp(8))
+
+        content.add_widget(Label(
+            text=f"Vocaux trouvés : {len(files)}\nClique sur un vocal pour l'attacher à la note.",
+            color=(1,1,1,1),
+            size_hint=(1,None),
+            height=dp(55)
+        ))
+
+        sv = ScrollView()
+        grid = GridLayout(cols=1, spacing=dp(4), size_hint_y=None)
+        grid.bind(minimum_height=grid.setter("height"))
+        sv.add_widget(grid)
+        content.add_widget(sv)
+
+        if not files:
+            grid.add_widget(Label(
+                text="Aucun vocal trouvé.\nEnregistre d'abord avec l'application Enregistreur vocal Android.",
+                color=(1,1,1,1),
+                size_hint_y=None,
+                height=dp(90)
+            ))
+
+        for path in files:
+            short = os.path.basename(path)
+            folder = os.path.dirname(path)
+            txt = short + "\n" + folder
+
+            b = Button(text=txt, font_size=dp(10), size_hint_y=None, height=dp(58))
+
+            def choose(btn, p=path):
+                vocal_input.text = p
+                pop.dismiss()
+                self.message(
+                    "Vocal",
+                    "Vocal attaché :\n" + p + "\n\nClique sur ENREGISTRER pour sauvegarder la note."
+                )
+
+            b.bind(on_release=choose)
+            grid.add_widget(b)
+
+        close = Button(text="FERMER", size_hint=(1,None), height=dp(42))
+        content.add_widget(close)
+
+        pop = Popup(title="Liste des vocaux", content=content, size_hint=(0.96,0.90))
+        close.bind(on_release=lambda x: pop.dismiss())
+        pop.open()
+
+    def open_android_recorder_v1092(self):
+        if platform != "android":
+            self.message("Micro", "Sur iPhone/Web, utilise Dictaphone puis indique le fichier.")
+            return
+
+        try:
+            from jnius import autoclass
+            Intent = autoclass("android.content.Intent")
+            PythonActivity = autoclass("org.kivy.android.PythonActivity")
+
+            intent = Intent("android.provider.MediaStore.RECORD_SOUND")
+            PythonActivity.mActivity.startActivity(intent)
+
+            self.message(
+                "Micro",
+                "L'enregistreur vocal Android est ouvert.\n\n"
+                "Après l'enregistrement, reviens dans GEOSTAR puis clique sur LISTE VOCAUX."
+            )
+        except Exception:
+            self.message(
+                "Micro",
+                "Ouvre manuellement l'application Enregistreur vocal Android, puis reviens dans GEOSTAR et clique sur LISTE VOCAUX."
+            )
+
+    def play_vocal_v1092(self, path):
+        path = path.strip()
+
+        if not path:
+            self.message("Vocal", "Aucun vocal attaché à cette note.")
+            return
+
+        if not os.path.exists(path):
+            self.message("Vocal", "Fichier vocal introuvable :\n" + path)
+            return
+
+        if platform == "android":
+            try:
+                from jnius import autoclass
+
+                old_player = getattr(self, "_geostar_player", None)
+                if old_player is not None:
+                    try:
+                        old_player.stop()
+                        old_player.release()
+                    except Exception:
+                        pass
+
+                MediaPlayer = autoclass("android.media.MediaPlayer")
+                player = MediaPlayer()
+                player.setDataSource(path)
+                player.prepare()
+                player.start()
+
+                self._geostar_player = player
+                self.message("Vocal", "Lecture en cours.\n\n" + os.path.basename(path))
+                return
+            except Exception as e:
+                self.message("Vocal", "Impossible de lire le vocal.\n\n" + str(e))
+                return
+
+        self.message("Vocal", "Vocal :\n" + path)
+
+    def stop_vocal_v1092(self):
+        player = getattr(self, "_geostar_player", None)
+
+        if player is None:
+            self.message("Vocal", "Aucune lecture en cours.")
+            return
+
+        try:
+            player.stop()
+            player.release()
+        except Exception:
+            pass
+
+        self._geostar_player = None
+        self.message("Vocal", "Lecture arrêtée.")
+
+    def delete_vocal_v1092(self, vocal_input):
+        path = vocal_input.text.strip()
+
+        if not path:
+            self.message("Vocal", "Aucun vocal à supprimer.")
+            return
+
+        deleted = False
+        try:
+            if os.path.exists(path):
+                os.remove(path)
+                deleted = True
+        except Exception:
+            deleted = False
+
+        vocal_input.text = ""
+
+        if deleted:
+            self.message("Vocal", "Fichier vocal supprimé.\nClique sur ENREGISTRER pour sauvegarder.")
+        else:
+            self.message("Vocal", "Vocal retiré de la note.\nLe fichier n'a pas pu être supprimé physiquement.\nClique sur ENREGISTRER.")
+
+    MoneyRoot.scan_audio_files_v1092 = scan_audio_files_v1092
+    MoneyRoot.popup_vocal_list_v1092 = popup_vocal_list_v1092
+    MoneyRoot.open_android_recorder_v1092 = open_android_recorder_v1092
+    MoneyRoot.play_vocal_v1092 = play_vocal_v1092
+    MoneyRoot.stop_vocal_v1092 = stop_vocal_v1092
+    MoneyRoot.delete_vocal_v1092 = delete_vocal_v1092
+
+    def popup_notes_current_v1092(self):
+        existing = None
+        for n in self.notes:
+            if n.get("key") == self.current_key():
+                existing = n
+                break
+
+        box = BoxLayout(orientation="vertical", spacing=dp(6), padding=dp(8))
+
+        name = TextInput(
+            hint_text="Nom de la note",
+            multiline=False,
+            text=existing.get("nom", "") if existing else ""
+        )
+        note = TextInput(
+            hint_text="Note écrite",
+            multiline=True,
+            text=existing.get("note", "") if existing else ""
+        )
+        vocal = TextInput(
+            hint_text="Mémo vocal attaché",
+            multiline=False,
+            text=existing.get("vocal", "") if existing else ""
+        )
+
+        box.add_widget(name)
+        box.add_widget(note)
+        box.add_widget(vocal)
+
+        row1 = BoxLayout(orientation="horizontal", size_hint=(1,None), height=dp(45), spacing=dp(5))
+        save_btn = Button(text="ENREGISTRER")
+        record_btn = Button(text="OUVRIR ENREGISTREUR")
+        list_btn = Button(text="LISTE VOCAUX")
+        row1.add_widget(save_btn)
+        row1.add_widget(record_btn)
+        row1.add_widget(list_btn)
+        box.add_widget(row1)
+
+        row2 = BoxLayout(orientation="horizontal", size_hint=(1,None), height=dp(45), spacing=dp(5))
+        play_btn = Button(text="LIRE VOCAL")
+        stop_btn = Button(text="STOP LECTURE")
+        delete_vocal_btn = Button(text="SUPPRIMER VOCAL")
+        row2.add_widget(play_btn)
+        row2.add_widget(stop_btn)
+        row2.add_widget(delete_vocal_btn)
+        box.add_widget(row2)
+
+        row3 = BoxLayout(orientation="horizontal", size_hint=(1,None), height=dp(45), spacing=dp(5))
+        delete_note_btn = Button(text="SUPPRIMER NOTE")
+        close_btn = Button(text="FERMER")
+        row3.add_widget(delete_note_btn)
+        row3.add_widget(close_btn)
+        box.add_widget(row3)
+
+        pop = Popup(title="NOTE du thème", content=box, size_hint=(0.96,0.88))
+
+        def save(_):
+            item = {
+                "key": self.current_key(),
+                "date": datetime.now().strftime("%d/%m/%Y %H:%M:%S"),
+                "nom": name.text.strip() or "Note sans nom",
+                "note": note.text.strip(),
+                "vocal": vocal.text.strip(),
+                "meres": self.mother_codes,
+                "maisons": {str(k): v for k, v in self.h.items()},
+            }
+
+            found = False
+            for i, n in enumerate(self.notes):
+                if n.get("key") == item["key"]:
+                    self.notes[i] = item
+                    found = True
+                    break
+
+            if not found:
+                self.notes.append(item)
+
+            write_json(NOTES_FILE, self.notes)
+            self.message("NOTE", "Note enregistrée.")
+
+        def delete_note(_):
+            path = vocal.text.strip()
+            try:
+                if path and os.path.exists(path):
+                    os.remove(path)
+            except Exception:
+                pass
+
+            self.notes = [n for n in self.notes if n.get("key") != self.current_key()]
+            write_json(NOTES_FILE, self.notes)
+            pop.dismiss()
+            self.message("NOTE", "Note supprimée.")
+
+        save_btn.bind(on_release=save)
+        record_btn.bind(on_release=lambda x: self.open_android_recorder_v1092())
+        list_btn.bind(on_release=lambda x: self.popup_vocal_list_v1092(vocal))
+        play_btn.bind(on_release=lambda x: self.play_vocal_v1092(vocal.text))
+        stop_btn.bind(on_release=lambda x: self.stop_vocal_v1092())
+        delete_vocal_btn.bind(on_release=lambda x: self.delete_vocal_v1092(vocal))
+        delete_note_btn.bind(on_release=delete_note)
+        close_btn.bind(on_release=lambda x: pop.dismiss())
+
+        pop.open()
+
+    MoneyRoot.popup_notes_current = popup_notes_current_v1092
+
+_geostar_v1092_patch()
+
+
+
+# ============================================================
+# GEOSTAR V10.9.3 - FERMETURE COMPLETE DES FENETRES SOLUTIONS
+# ============================================================
+# Corrige :
+# Quand on clique sur une solution, la liste se fermait,
+# mais le menu principal SOLUTIONS restait ouvert derrière.
+# Maintenant GEOSTAR ferme toutes les fenêtres solutions.
+# ============================================================
+
+def _geostar_v1093_patch():
+
+    def register_solution_popup(self, pop):
+        if not hasattr(self, "_solution_popups"):
+            self._solution_popups = []
+        self._solution_popups.append(pop)
+
+    def close_all_solution_popups(self):
+        if not hasattr(self, "_solution_popups"):
+            self._solution_popups = []
+            return
+
+        for p in list(self._solution_popups):
+            try:
+                p.dismiss()
+            except Exception:
+                pass
+
+        self._solution_popups = []
+
+    MoneyRoot.register_solution_popup = register_solution_popup
+    MoneyRoot.close_all_solution_popups = close_all_solution_popups
+
+    old_popup_solutions = MoneyRoot.popup_solutions
+    old_open_solution_window = MoneyRoot.open_solution_window
+    old_apply_solution_from_list = MoneyRoot.apply_solution_from_list
+
+    def popup_solutions_v1093(self):
+        from kivy.uix.togglebutton import ToggleButton as TBs
+        self.close_all_solution_popups()
+        import os as _os
+        SAVED_FILE = _os.path.join(_os.path.expanduser("~"), "geostar_saved_combos.json")
+
+        # Layout principal avec 2 onglets
+        main = BoxLayout(orientation="vertical", spacing=dp(4), padding=dp(6))
+
+        # Barre onglets
+        tab_bar = BoxLayout(orientation="horizontal", size_hint=(1,None), height=dp(40), spacing=dp(4))
+        t_search = TBs(text="RECHERCHES", group="sol_tabs", state="down", size_hint=(0.5,1))
+        t_saved  = TBs(text="COMBINAISONS", group="sol_tabs", size_hint=(0.5,1))
+        tab_bar.add_widget(t_search); tab_bar.add_widget(t_saved)
+        main.add_widget(tab_bar)
+
+        zone = BoxLayout(size_hint=(1,1))
+        main.add_widget(zone)
+
+        # ---- Contenu onglet RECHERCHES ----
+        sv_search = ScrollView()
+        box = GridLayout(cols=1, spacing=dp(5), size_hint_y=None)
+        box.bind(minimum_height=box.setter("height"))
+
+        def open_predef_menu():
+            sub = BoxLayout(orientation="vertical", spacing=dp(5), padding=dp(8))
+            sub.add_widget(Label(text="Solutions prédéfinies", color=(0.6,0.8,1,1), size_hint=(1,None), height=dp(28), font_size=dp(11)))
+            sv_sub = ScrollView()
+            grid_sub = GridLayout(cols=1, spacing=dp(4), size_hint_y=None)
+            grid_sub.bind(minimum_height=grid_sub.setter("height"))
+            options = [
+                ("5-10-16 toutes", [5,10,16], False),
+                ("5-10-16 rares 7-13/7-15", [5,10,16], True),
+                ("3-10-15 toutes", [3,10,15], False),
+                ("10-11-15", [10,11,15], False),
+                ("3-11-15", [3,11,15], False),
+                ("2-3-13", [2,3,13], False),
+                ("10-13-15", [10,13,15], False),
+                ("2-10-15", [2,10,15], False),
+            ]
+            for name, pos, rare in options:
+                b = Button(text=name, size_hint=(1,None), height=dp(42))
+                b.bind(on_release=lambda btn, n=name, p=pos, r=rare: self.open_solution_window(n, p, r))
+                grid_sub.add_widget(b)
+            sv_sub.add_widget(grid_sub)
+            sub.add_widget(sv_sub)
+            b_close = Button(text="FERMER", size_hint=(1,None), height=dp(42))
+            sub.add_widget(b_close)
+            pop_sub = Popup(title="Solutions prédéfinies", content=sub, size_hint=(0.92,0.75))
+            b_close.bind(on_release=lambda x: pop_sub.dismiss())
+            pop_sub.open()
+
+        btn_predef = Button(
+            text="SOLUTIONS PRÉDÉFINIES",
+            size_hint=(1,None), height=dp(42),
+            background_color=(0.2,0.35,0.55,1)
+        )
+        btn_predef.bind(on_release=lambda x: open_predef_menu())
+        box.add_widget(btn_predef)
+
+        # Recherche non stricte personnalisée
+        def open_non_stricte_menu():
+            sub = BoxLayout(orientation="vertical", spacing=dp(5), padding=dp(8))
+            sub.add_widget(Label(
+                text="Choisis une figure et des maisons\nMode NON STRICTE : la figure peut apparaître ailleurs aussi",
+                color=(0.6,0.85,1,1), size_hint=(1,None), height=dp(50),
+                font_size=dp(11), halign="center"
+            ))
+            # Bouton vers la recherche par figure (qui a déjà strict/non strict)
+            b_fig = Button(
+                text="RECHERCHE PAR FIGURE (Strict / Non Strict)",
+                size_hint=(1,None), height=dp(48),
+                background_color=(0.1,0.4,0.65,1)
+            )
+            def go_fig(_):
+                pop.dismiss()
+                if hasattr(self, "popup_search_by_figure"):
+                    self.popup_search_by_figure()
+                elif hasattr(self, "popup_figure_search"):
+                    self.popup_figure_search()
+            b_fig.bind(on_release=go_fig)
+            sub.add_widget(b_fig)
+            b_close = Button(text="FERMER", size_hint=(1,None), height=dp(42))
+            sub.add_widget(b_close)
+            pop_ns = Popup(title="Recherche Non Stricte", content=sub, size_hint=(0.92,0.5))
+            b_close.bind(on_release=lambda x: pop_ns.dismiss())
+            pop_ns.open()
+
+        btn_ns = Button(
+            text="+ RECHERCHE NON STRICTE / STRICTE",
+            size_hint=(1,None), height=dp(42),
+            background_color=(0.1,0.35,0.6,1)
+        )
+        btn_ns.bind(on_release=lambda x: open_non_stricte_menu())
+        box.add_widget(btn_ns)
+
+        add = Button(text="+ AJOUTER RECHERCHE PERSONNALISÉE", size_hint=(1,None), height=dp(40), background_color=(0.2,0.4,0.6,1))
+        add.bind(on_release=lambda x: self.popup_add_custom_search())
+        box.add_widget(add)
+
+        rep_btn = Button(text="+ RECHERCHE PAR NOMBRE DE RÉPÉTITIONS", size_hint=(1,None), height=dp(40), background_color=(0.2,0.4,0.6,1))
+        rep_btn.bind(on_release=lambda x: self.popup_repetition_count())
+        box.add_widget(rep_btn)
+
+        if self.custom_searches:
+            box.add_widget(Label(text="Recherches perso :", color=(0.6,0.9,0.7,1), size_hint=(1,None), height=dp(24)))
+            for item in self.custom_searches:
+                name = item.get("name", "Sans nom")
+                pos = sorted(set(item.get("positions", [])))
+                b = Button(text=name + " : " + str(pos), size_hint=(1,None), height=dp(34))
+                b.bind(on_release=lambda btn, it=item: self.open_solution_window(it.get("name","Perso"), sorted(set(it.get("positions",[]))), False))
+                box.add_widget(b)
+
+        repeat_searches = self.get_repeat_searches() if hasattr(self, "get_repeat_searches") else []
+        if repeat_searches:
+            box.add_widget(Label(text="Recherches répétitions :", color=(0.6,0.9,0.7,1), size_hint=(1,None), height=dp(24)))
+            for item in repeat_searches:
+                name = item.get("name", "Répétition")
+                count = item.get("count")
+                b = Button(text=name + " | x" + str(count), size_hint=(1,None), height=dp(34))
+                if hasattr(self, "open_repetition_results_v105"):
+                    b.bind(on_release=lambda btn, it=item: self.open_repetition_results_v105(it.get("count"), it.get("target")))
+                elif hasattr(self, "open_repetition_results"):
+                    b.bind(on_release=lambda btn, it=item: self.open_repetition_results(it.get("count"), it.get("target")))
+                box.add_widget(b)
+
+        manage = Button(text="SUPPRIMER RECHERCHE PERSO", size_hint=(1,None), height=dp(36), background_color=(0.4,0.15,0.15,1))
+        manage.bind(on_release=lambda x: self.popup_delete_custom_search())
+        box.add_widget(manage)
+        manage_rep = Button(text="SUPPRIMER RECHERCHE RÉPÉTITIONS", size_hint=(1,None), height=dp(36), background_color=(0.4,0.15,0.15,1))
+        if hasattr(self, "popup_delete_repeat_search"):
+            manage_rep.bind(on_release=lambda x: self.popup_delete_repeat_search())
+        box.add_widget(manage_rep)
+
+        sv_search.add_widget(box)
+
+        # ---- Contenu onglet COMBINAISONS ----
+        sv_saved = ScrollView()
+        grid_saved = GridLayout(cols=1, spacing=dp(4), size_hint_y=None)
+        grid_saved.bind(minimum_height=grid_saved.setter("height"))
+        sv_saved.add_widget(grid_saved)
+
+        def refresh_saved():
+            grid_saved.clear_widgets()
+            saved = read_json(SAVED_FILE, [])
+            if not saved:
+                grid_saved.add_widget(Label(
+                    text="Aucune combinaison enregistree.\nUtilise SAVE dans une recherche.",
+                    color=(0.6,0.6,0.6,1), size_hint_y=None, height=dp(70),
+                    halign="center"
+                ))
+                return
+            # Bouton tout supprimer
+            b_del_all = Button(
+                text="SUPPRIMER TOUTES LES COMBINAISONS",
+                size_hint=(1,None), height=dp(40),
+                background_color=(0.6,0.1,0.1,1)
+            )
+            def del_all(_):
+                write_json(SAVED_FILE, [])
+                refresh_saved()
+            b_del_all.bind(on_release=del_all)
+            grid_saved.add_widget(b_del_all)
+            for idx, item in enumerate(saved, 1):
+                fig_n = item.get("figure_nom","?")
+                pos_str = item.get("positions_str","")
+                m1,m2,m3,m4 = item.get("m1","?"),item.get("m2","?"),item.get("m3","?"),item.get("m4","?")
+                mode = item.get("mode","")
+                txt = str(idx) + ". " + fig_n + " " + pos_str + " [" + mode + "]\n    M1=" + m1 + " M2=" + m2 + " M3=" + m3 + " M4=" + m4
+                row = BoxLayout(orientation="horizontal", size_hint_y=None, height=dp(56), spacing=dp(3))
+                b = Button(text=txt, font_size=dp(10), size_hint=(0.75,1), halign="left")
+                b_del = Button(text="X", size_hint=(0.12,1), background_color=(0.7,0.1,0.1,1))
+                b_app = Button(text="GO", size_hint=(0.13,1), background_color=(0.1,0.4,0.7,1))
+                def on_app(btn, it=item):
+                    pop.dismiss()
+                    sol = {"m1":it["m1"],"m2":it["m2"],"m3":it["m3"],"m4":it["m4"],
+                           "figure":it.get("figure_bits","1111"),"positions":[],"secondary":""}
+                    self.apply_solution(sol)
+                def on_del(btn, it=item):
+                    sv2 = read_json(SAVED_FILE, [])
+                    sv2 = [x for x in sv2 if x != it]
+                    write_json(SAVED_FILE, sv2)
+                    refresh_saved()
+                b.bind(on_release=on_app)
+                b_app.bind(on_release=on_app)
+                b_del.bind(on_release=on_del)
+                row.add_widget(b); row.add_widget(b_app); row.add_widget(b_del)
+                grid_saved.add_widget(row)
+
+        def switch_tab(btn):
+            zone.clear_widgets()
+            if t_search.state == "down":
+                zone.add_widget(sv_search)
+            else:
+                refresh_saved()
+                zone.add_widget(sv_saved)
+
+        t_search.bind(on_press=switch_tab)
+        t_saved.bind(on_press=switch_tab)
+        zone.add_widget(sv_search)  # Onglet par defaut
+
+        pop = Popup(title="SOLUTIONS", content=main, size_hint=(0.95,0.95))
+        self.register_solution_popup(pop)
+        pop.open()
+
+    MoneyRoot.popup_solutions = popup_solutions_v1093
+
+    def open_solution_window_v1093(self, title, positions, rare):
+        import os as _os
+        SAVED_FILE = _os.path.join(_os.path.expanduser("~"), "geostar_saved_combos.json")
+        positions = sorted(set([int(p) for p in positions]))
+        current_sol = [None]
+
+        content = BoxLayout(orientation="vertical", padding=dp(6), spacing=dp(4))
+        header = Label(
+            text=title + "\nCalcul en cours...",
+            color=(1,1,1,1), size_hint=(1,None), height=dp(55)
+        )
+        content.add_widget(header)
+
+        sv = ScrollView()
+        grid = GridLayout(cols=1, spacing=dp(3), size_hint_y=None)
+        grid.bind(minimum_height=grid.setter("height"))
+        sv.add_widget(grid)
+        content.add_widget(sv)
+
+        close = Button(text="FERMER", size_hint=(1,None), height=dp(42))
+        content.add_widget(close)
+
+        pop = Popup(title=title, content=content, size_hint=(0.98,0.94))
+        self.register_solution_popup(pop)
+        close.bind(on_release=lambda x: pop.dismiss())
+        pop.open()
+
+        def save_sol(sol):
+            saved = read_json(SAVED_FILE, [])
+            fig = data_fig(sol["figure"])["africain"]
+            pos_str = "M" + "M".join(str(p) for p in sol.get("positions", positions))
+            entry = {
+                "figure_nom": fig,
+                "figure_bits": sol["figure"],
+                "positions_str": pos_str,
+                "mode": "S" if rare else "NS",
+                "m1": sol["m1"], "m2": sol["m2"],
+                "m3": sol["m3"], "m4": sol["m4"]
+            }
+            if entry not in saved:
+                saved.append(entry)
+                write_json(SAVED_FILE, saved)
+                self.message("Enregistre", fig + " " + pos_str + " sauvegarde!")
+            else:
+                self.message("Deja enregistre", fig + " " + pos_str + " existe deja.")
+
+        def fill(dt):
+            try:
+                sols = self.get_solutions_cached(positions, rare)
+                header.text = title + "\nTotal : " + str(len(sols)) + " solution(s)"
+
+                if not sols:
+                    grid.add_widget(Label(
+                        text="Aucune solution trouvee.",
+                        color=(1,0.4,0.4,1), size_hint_y=None, height=dp(60)
+                    ))
+                    return
+
+                for idx, sol in enumerate(sols, 1):
+                    fig = data_fig(sol["figure"])["africain"]
+                    sec = (" | " + sol["secondary"]) if sol.get("secondary") else ""
+                    txt = (str(idx) + ". " + fig + " " + str(sol["positions"]) +
+                           "\nM1=" + sol["m1"] + " M2=" + sol["m2"] +
+                           " M3=" + sol["m3"] + " M4=" + sol["m4"] + sec)
+
+                    row = BoxLayout(orientation="horizontal", size_hint_y=None, height=dp(56), spacing=dp(3))
+
+                    b = Button(text=txt, font_size=dp(10), size_hint=(0.78,1), halign="left")
+                    b_save = Button(text="SAVE", size_hint=(0.22,1),
+                                   background_color=(0.1,0.5,0.25,1), font_size=dp(11))
+
+                    def on_click(btn, s=sol, sl=sols):
+                        self.apply_solution_from_list_v1093(s, sl)
+                    def on_save_click(btn, s=sol):
+                        save_sol(s)
+
+                    b.bind(on_release=on_click)
+                    b_save.bind(on_release=on_save_click)
+                    row.add_widget(b)
+                    row.add_widget(b_save)
+                    grid.add_widget(row)
+
+            except Exception as e:
+                header.text = "Erreur"
+                grid.add_widget(Label(text=str(e), color=(1,1,1,1), size_hint_y=None, height=dp(80)))
+
+        Clock.schedule_once(fill, 0.1)
+
+    MoneyRoot.open_solution_window = open_solution_window_v1093
+
+    def apply_solution_from_list_v1093(self, sol, sol_list, pop=None):
+        # Ferme menu principal + liste.
+        self.close_all_solution_popups()
+
+        self.active_solutions = sol_list
+        try:
+            self.active_solution_index = sol_list.index(sol)
+        except ValueError:
+            self.active_solution_index = 0
+
+        self.mother_codes = [sol["m1"], sol["m2"], sol["m3"], sol["m4"]]
+        self.afficher_theme(developper_theme(*self.mother_codes))
+
+    MoneyRoot.apply_solution_from_list_v1093 = apply_solution_from_list_v1093
+    MoneyRoot.apply_solution_from_list = apply_solution_from_list_v1093
+    MoneyRoot.apply_solution_from_list_v105 = apply_solution_from_list_v1093
+
+    # Correction aussi pour la recherche par répétitions, si elle existe.
+    if hasattr(MoneyRoot, "open_repetition_results_v105"):
+        old_open_rep = MoneyRoot.open_repetition_results_v105
+
+        def open_repetition_results_v1093(self, count, target_bits=None):
+            old_open_rep(self, count, target_bits)
+            # La fenêtre ouverte par l'ancien code n'est pas toujours enregistrée.
+            # Mais les boutons internes utilisent maintenant apply_solution_from_list,
+            # donc après sélection toutes les popups solutions seront fermées.
+
+        MoneyRoot.open_repetition_results_v105 = open_repetition_results_v1093
+
+_geostar_v1093_patch()
+
+
+
+# ============================================================
+# GEOSTAR V11.6 PROPRE
+# ============================================================
+# Reconstruction propre depuis base stable :
+# - Photos stables dans les figures
+# - Galerie rapide paginée
+# - Nuances par figure répétée
+# - Terre marron clair
+# - Impression/export PNG dans Pictures/GEOSTAR
+# - Aucun patch redraw_photo_v115
+# ============================================================
+
+IMAGE_FILE = "geostar_images_figures.json"
+IMAGE_CACHE_FILE = "geostar_cache_images.json"
+PRINT_IMAGE_FILE = "geostar_theme_export.png"
+
+def _geostar_v116_clean_patch():
+
+    try:
+        from kivy.core.image import Image as CoreImage
+    except Exception:
+        CoreImage = None
+
+    try:
+        from kivy.uix.image import Image as KivyImage
+    except Exception:
+        KivyImage = None
+
+    IMAGE_EXTENSIONS = (".jpg", ".jpeg", ".png", ".webp", ".bmp")
+
+    # ---------------- COULEURS NUANCÉES ----------------
+
+    def color_for_bits_clean(bits):
+        if bits not in BIN_TO_CODE:
+            return (0.68, 0.38, 1.0, 1)
+
+        code = BIN_TO_CODE[bits]
+
+        colors = {
+            # FEU rouges distincts
+            "1121": (1.00, 0.08, 0.05, 1),  # Sedjou
+            "1222": (1.00, 0.30, 0.20, 1),  # Adama
+            "1122": (0.86, 0.03, 0.03, 1),  # Kalalao
+            "1212": (1.00, 0.52, 0.42, 1),  # Inzan
+
+            # VENT jaunes/or
+            "2111": (1.00, 0.93, 0.10, 1),
+            "2122": (0.95, 0.75, 0.05, 1),
+            "2112": (1.00, 0.83, 0.25, 1),
+            "2121": (0.82, 0.70, 0.12, 1),
+
+            # EAU bleus
+            "1111": (0.10, 0.38, 1.00, 1),
+            "2222": (0.22, 0.60, 1.00, 1),
+            "1112": (0.08, 0.25, 0.88, 1),
+            "2212": (0.45, 0.75, 1.00, 1),
+
+            # TERRE marrons clairs
+            "2211": (0.74, 0.48, 0.24, 1),
+            "1221": (0.86, 0.60, 0.32, 1),
+            "1211": (0.66, 0.43, 0.22, 1),
+            "2221": (0.92, 0.70, 0.42, 1),
+        }
+        return colors.get(code, (1,1,1,1))
+
+    globals()["color_for_bits_v116"] = color_for_bits_clean
+    globals()["color_for_bits_v106"] = color_for_bits_clean
+
+    # ---------------- IMAGES PAR MAISON ----------------
+
+    def load_figure_images(self):
+        if not hasattr(self, "figure_images"):
+            self.figure_images = read_json(IMAGE_FILE, {})
+        return self.figure_images
+
+    def save_figure_images(self):
+        write_json(IMAGE_FILE, self.load_figure_images_v116())
+
+    def theme_key(self):
+        try:
+            return self.current_key()
+        except Exception:
+            try:
+                return "-".join(self.mother_codes)
+            except Exception:
+                return "theme_default"
+
+    def get_image(self, maison):
+        data = self.load_figure_images_v116()
+        return data.get(self.theme_key_v116(), {}).get(str(maison), "")
+
+    def set_image(self, maison, path):
+        data = self.load_figure_images_v116()
+        key = self.theme_key_v116()
+        if key not in data:
+            data[key] = {}
+        data[key][str(maison)] = path
+        self.save_figure_images_v116()
+
+    def delete_image(self, maison):
+        data = self.load_figure_images_v116()
+        key = self.theme_key_v116()
+        if key in data and str(maison) in data[key]:
+            del data[key][str(maison)]
+        self.save_figure_images_v116()
+
+    MoneyRoot.load_figure_images_v116 = load_figure_images
+    MoneyRoot.save_figure_images_v116 = save_figure_images
+    MoneyRoot.theme_key_v116 = theme_key
+    MoneyRoot.get_image_for_maison_v116 = get_image
+    MoneyRoot.set_image_for_maison_v116 = set_image
+    MoneyRoot.delete_image_for_maison_v116 = delete_image
+
+    # ---------------- SCAN IMAGE RAPIDE ----------------
+
+    def scan_image_files_v116(self, limit=500, force_refresh=False):
+        if not force_refresh:
+            cached = read_json(IMAGE_CACHE_FILE, [])
+            valid = []
+            for p in cached:
+                try:
+                    if os.path.exists(p) and "/.thumbnails/" not in p and "/.thumbnail/" not in p:
+                        valid.append(p)
+                except Exception:
+                    pass
+            if valid:
+                return valid[:limit]
+
+        folders = [
+            "/storage/emulated/0/DCIM",
+            "/storage/emulated/0/Pictures",
+            "/storage/emulated/0/Download",
+            "/storage/emulated/0/Downloads",
+            "/storage/emulated/0/Documents",
+            "/storage/emulated/0/Images",
+            "/storage/emulated/0/WhatsApp/Media/WhatsApp Images",
+            "/sdcard/DCIM",
+            "/sdcard/Pictures",
+            "/sdcard/Download",
+            "/sdcard/Downloads",
+        ]
+
+        found = []
+        seen = set()
+
+        for folder in folders:
+            if not os.path.exists(folder):
+                continue
+
+            try:
+                for root, dirs, files in os.walk(folder):
+                    dirs[:] = [d for d in dirs if d.lower() not in [".thumbnails", ".thumbnail", "thumbnails"]]
+                    if "/.thumbnails/" in root or "/.thumbnail/" in root:
+                        continue
+
+                    depth = root.replace(folder, "").count(os.sep)
+                    if depth > 3:
+                        dirs[:] = []
+                        continue
+
+                    for name in files:
+                        if name.lower().endswith(IMAGE_EXTENSIONS):
+                            path = os.path.join(root, name)
+                            if path not in seen:
+                                seen.add(path)
+                                found.append(path)
+
+                        if len(found) >= limit:
+                            break
+                    if len(found) >= limit:
+                        break
+            except Exception:
+                pass
+
+        try:
+            found.sort(key=lambda p: os.path.getmtime(p) if os.path.exists(p) else 0, reverse=True)
+        except Exception:
+            pass
+
+        write_json(IMAGE_CACHE_FILE, found)
+        return found
+
+    MoneyRoot.scan_image_files_v116 = scan_image_files_v116
+
+    # ---------------- CARTE STABLE PHOTO ----------------
+
+    class GeoStarFigureCard(Widget):
+        def __init__(self, maison=1, bits="0000", root=None, repeated=False, image_path="", **kwargs):
+            super().__init__(**kwargs)
+            self.maison = maison
+            self.bits = bits
+            self.root = root
+            self.repeated = repeated
+            self.image_path = image_path or ""
+            self.drag_enabled = False
+            self.dx = 0
+            self.dy = 0
+            self.long_event = None
+            self.bind(pos=self.redraw, size=self.redraw)
+
+        def set_bits(self, bits):
+            self.bits = bits
+            self.redraw()
+
+        def enable_drag(self, dt):
+            self.drag_enabled = True
+            self.pos_hint = {}
+            self.size_hint = (None, None)
+            self.size = (self.width, self.height)
+            if self.root:
+                self.root.info.text = "Déplacement activé : glisse la figure."
+
+        def on_touch_down(self, touch):
+            if self.collide_point(*touch.pos):
+                self.drag_enabled = False
+                self.dx = self.x - touch.x
+                self.dy = self.y - touch.y
+                touch.grab(self)
+                self.long_event = Clock.schedule_once(self.enable_drag, 3.0)
+                return True
+            return False
+
+        def on_touch_move(self, touch):
+            if touch.grab_current is self:
+                if self.drag_enabled:
+                    self.x = touch.x + self.dx
+                    self.y = touch.y + self.dy
+                return True
+            return False
+
+        def on_touch_up(self, touch):
+            if touch.grab_current is self:
+                touch.ungrab(self)
+                if self.long_event:
+                    self.long_event.cancel()
+                    self.long_event = None
+                if not self.drag_enabled and self.root:
+                    self.root.popup_edit_figure(self.maison)
+                self.drag_enabled = False
+                return True
+            return False
+
+        def draw_symbol(self, cx, cy, dot_r, sep, symbol):
+            if symbol == "1":
+                Ellipse(pos=(cx-dot_r, cy-dot_r), size=(dot_r*2, dot_r*2))
+            elif symbol == "0":
+                Ellipse(pos=(cx-sep-dot_r, cy-dot_r), size=(dot_r*2, dot_r*2))
+                Ellipse(pos=(cx+sep-dot_r, cy-dot_r), size=(dot_r*2, dot_r*2))
+            elif symbol == "Q":
+                Line(circle=(cx, cy, dot_r*1.45), width=2)
+                Ellipse(pos=(cx-dot_r*0.35, cy-dot_r*0.35), size=(dot_r*0.7, dot_r*0.7))
+            else:
+                Ellipse(pos=(cx-dot_r, cy-dot_r), size=(dot_r*2, dot_r*2))
+
+        def redraw(self, *args):
+            self.canvas.clear()
+            x, y = self.pos
+            w, h = self.size
+            if w <= 5 or h <= 5:
+                return
+
+            with self.canvas:
+                drew_image = False
+
+                if self.image_path and os.path.exists(self.image_path) and CoreImage is not None:
+                    try:
+                        tex = CoreImage(self.image_path).texture
+                        Color(1, 1, 1, 1)
+                        Rectangle(pos=(x, y), size=(w, h), texture=tex)
+                        drew_image = True
+                    except Exception:
+                        drew_image = False
+
+                if not drew_image:
+                    if self.repeated:
+                        Color(*color_for_bits_clean(self.bits))
+                    else:
+                        Color(1, 1, 1, 1)
+                    RoundedRectangle(pos=(x, y), size=(w, h), radius=[dp(5)])
+                else:
+                    Color(1, 1, 1, 0.20)
+                    RoundedRectangle(pos=(x, y), size=(w, h), radius=[dp(5)])
+
+                # Points
+                Color(0, 0, 0, 1)
+                top = h * 0.17
+                bottom = h * 0.13
+                row_gap = (h - top - bottom) / 4.0
+                dot_r = min(w, h) * 0.055
+                sep = w * 0.18
+
+                for i, b in enumerate(self.bits):
+                    cy = y + h - top - (i+0.5)*row_gap
+                    cx = x + w/2
+                    self.draw_symbol(cx, cy, dot_r, sep, b)
+
+                Color(0, 0, 0, 0.35)
+                Line(rounded_rectangle=(x, y, w, h, dp(5)), width=1)
+
+    globals()["GeoStarFigureCard"] = GeoStarFigureCard
+
+    # ---------------- ADD_CARD STABLE ----------------
+
+    def add_card_v116(self, maison, bits, rx, ry, rw, rh, repeated=False, *args, **kwargs):
+        card = GeoStarFigureCard(
+            maison=maison,
+            bits=bits,
+            root=self,
+            repeated=repeated,
+            image_path=self.get_image_for_maison_v116(maison),
+            size_hint=(rw, rh),
+            pos_hint={"x": rx, "y": ry}
+        )
+
+        label = Label(
+            text=f"[b]M{maison}[/b]",
+            markup=True,
+            color=(1, 0.86, 0.05, 1),
+            font_size=dp(14),
+            size_hint=(rw, None),
+            height=dp(22),
+            pos_hint={"x": rx, "y": ry + rh}
+        )
+
+        self.board.add_widget(label)
+        self.board.add_widget(card)
+        self.cards[maison] = card
+        self.labels[maison] = label
+
+    MoneyRoot.add_card = add_card_v116
+
+    # ---------------- GALERIE PAGINÉE ----------------
+
+    def popup_image_list_v116(self, maison):
+        files = self.scan_image_files_v116(limit=500, force_refresh=False)
+        state = {"page": 0, "per_page": 24, "files": files}
+
+        content = BoxLayout(orientation="vertical", spacing=dp(6), padding=dp(8))
+
+        top = BoxLayout(orientation="horizontal", size_hint=(1,None), height=dp(50), spacing=dp(5))
+        title_lab = Label(text="", color=(1,1,1,1), size_hint=(0.45,1))
+        refresh_btn = Button(text="RAFRAÎCHIR", size_hint=(0.28,1))
+        reset_btn = Button(text="RESET CACHE", size_hint=(0.27,1))
+        top.add_widget(title_lab)
+        top.add_widget(refresh_btn)
+        top.add_widget(reset_btn)
+        content.add_widget(top)
+
+        sv = ScrollView()
+        grid = GridLayout(cols=4, spacing=dp(6), padding=dp(4), size_hint_y=None)
+        grid.bind(minimum_height=grid.setter("height"))
+        sv.add_widget(grid)
+        content.add_widget(sv)
+
+        nav = BoxLayout(orientation="horizontal", size_hint=(1,None), height=dp(45), spacing=dp(5))
+        prev_btn = Button(text="◀ PRÉCÉDENT")
+        next_btn = Button(text="SUIVANT ▶")
+        nav.add_widget(prev_btn)
+        nav.add_widget(next_btn)
+        content.add_widget(nav)
+
+        close = Button(text="FERMER", size_hint=(1,None), height=dp(42))
+        content.add_widget(close)
+
+        pop = Popup(title=f"Choisir image pour M{maison}", content=content, size_hint=(0.96,0.90))
+
+        def choose(path):
+            self.set_image_for_maison_v116(maison, path)
+            pop.dismiss()
+            self.afficher_theme(self.h)
+            self.message("Image", f"Image ajoutée à M{maison}.")
+
+        def render():
+            grid.clear_widgets()
+            total = len(state["files"])
+            per = state["per_page"]
+            pages = max(1, (total + per - 1)//per)
+            state["page"] = max(0, min(state["page"], pages-1))
+            page = state["page"]
+            title_lab.text = f"Images {total} | Page {page+1}/{pages}"
+
+            current = state["files"][page*per:min((page+1)*per, total)]
+
+            if not current:
+                grid.cols = 1
+                grid.add_widget(Label(
+                    text="Aucune image trouvée.\nMets une photo dans DCIM, Pictures ou Download.",
+                    color=(1,1,1,1),
+                    size_hint_y=None,
+                    height=dp(90)
+                ))
+                return
+
+            grid.cols = 4
+
+            for path in current:
+                cell = FloatLayout(size_hint_y=None, height=dp(125))
+                if KivyImage is not None:
+                    try:
+                        img = KivyImage(source=path, allow_stretch=True, keep_ratio=True, size_hint=(1,1), pos_hint={"x":0,"y":0})
+                        cell.add_widget(img)
+                    except Exception:
+                        cell.add_widget(Label(text="IMG", color=(1,1,1,1)))
+                else:
+                    cell.add_widget(Label(text="IMG", color=(1,1,1,1)))
+
+                overlay = Button(text="", background_color=(0,0,0,0), size_hint=(1,1), pos_hint={"x":0,"y":0})
+                overlay.bind(on_release=lambda x, p=path: choose(p))
+                cell.add_widget(overlay)
+                grid.add_widget(cell)
+
+        def refresh(_):
+            state["files"] = self.scan_image_files_v116(limit=500, force_refresh=True)
+            state["page"] = 0
+            render()
+
+        def reset(_):
+            write_json(IMAGE_CACHE_FILE, [])
+            state["files"] = self.scan_image_files_v116(limit=500, force_refresh=True)
+            state["page"] = 0
+            render()
+
+        prev_btn.bind(on_release=lambda x: (state.__setitem__("page", state["page"]-1), render()))
+        next_btn.bind(on_release=lambda x: (state.__setitem__("page", state["page"]+1), render()))
+        refresh_btn.bind(on_release=refresh)
+        reset_btn.bind(on_release=reset)
+        close.bind(on_release=lambda x: pop.dismiss())
+
+        render()
+        pop.open()
+
+    MoneyRoot.popup_image_list_v116 = popup_image_list_v116
+
+    # ---------------- EDIT FIGURE ----------------
+
+    def popup_edit_figure_v116(self, maison):
+        bits = self.h[maison]
+        d = data_fig(bits)
+        current_img = self.get_image_for_maison_v116(maison)
+
+        box = BoxLayout(orientation="vertical", spacing=dp(6), padding=dp(8))
+        box.add_widget(Label(
+            text=f"Maison {maison}\n{d['africain']} / {d['occidental']}\nImage : {'oui' if current_img else 'non'}",
+            color=(1,1,1,1),
+            size_hint=(1,None),
+            height=dp(85)
+        ))
+
+        img_row = BoxLayout(orientation="horizontal", size_hint=(1,None), height=dp(45), spacing=dp(5))
+        add_img_btn = Button(text="AJOUTER IMAGE")
+        del_img_btn = Button(text="SUPPRIMER IMAGE")
+        img_row.add_widget(add_img_btn)
+        img_row.add_widget(del_img_btn)
+        box.add_widget(img_row)
+
+        box.add_widget(Label(text="Modifier les points :", color=(1,1,1,1), size_hint=(1,None), height=dp(25)))
+
+        grid = GridLayout(cols=3, spacing=dp(4), size_hint=(1,None), height=dp(170))
+        box.add_widget(grid)
+
+        def mk(line, sym, label):
+            b = Button(text=f"L{line+1}\n{label}")
+            def act(_):
+                self.apply_symbol(maison, line, sym)
+                pop.dismiss()
+            b.bind(on_release=act)
+            return b
+
+        for line in range(4):
+            grid.add_widget(mk(line, "1", "1 point"))
+            grid.add_widget(mk(line, "0", "2 points"))
+            grid.add_widget(mk(line, "Q", "Q"))
+
+        close = Button(text="FERMER", size_hint=(1,None), height=dp(42))
+        box.add_widget(close)
+
+        pop = Popup(title=f"Modifier M{maison}", content=box, size_hint=(0.92,0.82))
+
+        add_img_btn.bind(on_release=lambda x: (pop.dismiss(), self.popup_image_list_v116(maison)))
+        del_img_btn.bind(on_release=lambda x: (self.delete_image_for_maison_v116(maison), pop.dismiss(), self.afficher_theme(self.h), self.message("Image", f"Image supprimée de M{maison}.")))
+        close.bind(on_release=lambda x: pop.dismiss())
+
+        pop.open()
+
+    MoneyRoot.popup_edit_figure = popup_edit_figure_v116
+
+    # ---------------- IMPRESSION PNG ----------------
+
+    def export_theme_png_v116(self):
+        # CORRIGE V11.6.1 : on ecrit dans le dossier prive de l'app
+        # (toujours accessible, pas de probleme de permission)
+        if platform == "android":
+            try:
+                from jnius import autoclass
+                PythonActivity = autoclass("org.kivy.android.PythonActivity")
+                ctx = PythonActivity.mActivity.getApplicationContext()
+                out_dir = ctx.getCacheDir().getAbsolutePath()
+            except Exception:
+                out_dir = os.path.abspath(".")
+        else:
+            out_dir = os.path.abspath(".")
+
+        try:
+            if not os.path.exists(out_dir):
+                os.makedirs(out_dir, exist_ok=True)
+            path = os.path.join(out_dir, "geostar_theme_export.png")
+        except Exception:
+            path = os.path.abspath("geostar_theme_export.png")
+
+        try:
+            self.board.export_to_png(path)
+            return path
+        except Exception:
+            try:
+                self.export_to_png(path)
+                return path
+            except Exception as e:
+                self.message("Impression", "Impossible de créer l'image.\n\n" + str(e))
+                return ""
+
+    def print_theme_v116(self):
+        # CORRIGE V11.6.1 : passage par MediaStore + URI content://
+        # au lieu de file:// (bloque par Android 7+)
+        path = self.export_theme_png_v116()
+        if not path:
+            return
+
+        if platform != "android":
+            self.message("Impression", "Image créée :\n" + path)
+            return
+
+        try:
+            from jnius import autoclass, cast
+
+            PythonActivity = autoclass("org.kivy.android.PythonActivity")
+            activity = PythonActivity.mActivity
+            context = activity.getApplicationContext()
+            resolver = context.getContentResolver()
+
+            ContentValues = autoclass("android.content.ContentValues")
+            MediaStoreImages = autoclass("android.provider.MediaStore$Images$Media")
+            BitmapFactory = autoclass("android.graphics.BitmapFactory")
+            CompressFormat = autoclass("android.graphics.Bitmap$CompressFormat")
+            Intent = autoclass("android.content.Intent")
+
+            filename = "geostar_" + datetime.now().strftime("%Y%m%d_%H%M%S") + ".png"
+
+            values = ContentValues()
+            values.put("_display_name", filename)
+            values.put("mime_type", "image/png")
+            values.put("title", "GEOSTAR Theme")
+
+            uri = resolver.insert(MediaStoreImages.EXTERNAL_CONTENT_URI, values)
+            if uri is None:
+                self.message("Impression", "Échec MediaStore.\nImage locale :\n" + path)
+                return
+
+            out_stream = resolver.openOutputStream(uri)
+            bmp = BitmapFactory.decodeFile(path)
+            if bmp is None:
+                out_stream.close()
+                self.message("Impression", "PNG illisible :\n" + path)
+                return
+            bmp.compress(CompressFormat.PNG, 100, out_stream)
+            out_stream.flush()
+            out_stream.close()
+
+            intent = Intent(Intent.ACTION_SEND)
+            intent.setType("image/png")
+            intent.putExtra(Intent.EXTRA_STREAM, cast("android.os.Parcelable", uri))
+            intent.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+
+            chooser = Intent.createChooser(intent, "Imprimer ou partager GEOSTAR")
+            chooser.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+            activity.startActivity(chooser)
+
+        except Exception as e:
+            self.message(
+                "Impression",
+                "Erreur de partage.\nImage locale :\n" + path + "\n\nDétail : " + str(e)
+            )
+
+    MoneyRoot.export_theme_png_v116 = export_theme_png_v116
+    MoneyRoot.print_theme_v112 = print_theme_v116
+    MoneyRoot.print_theme_v113 = print_theme_v116
+    MoneyRoot.print_theme_v114 = print_theme_v116
+    MoneyRoot.print_theme_v115 = print_theme_v116
+    MoneyRoot.print_theme_v116 = print_theme_v116
+
+    # Si bouton IMPRIMER déjà créé par ancienne version, il pointera souvent vers print_theme_v112/113.
+    # Ici toutes les routes pointent vers V11.6.
+
+_geostar_v116_clean_patch()
+
+
+if __name__ == "__main__":
+    MoneyApp().run()
+
+
+# ============================================================
+# PATCH V12 - MODE NON STRICT AMELIORE + ONGLETS SOLUTIONS
+# ============================================================
+
+def _geostar_v12_patch():
+
+    import os as _os
+    SAVED_FILE = _os.path.join(_os.path.expanduser("~"), "geostar_saved_combos.json")
+
+    def open_search_by_figure_window_v12(self, title, fig_code, positions, stricte=False):
+        """Fenetre de recherche avec onglets Solutions / Combinaisons enregistrees."""
+
+        # Layout principal
+        content = BoxLayout(orientation="vertical", padding=dp(4), spacing=dp(4))
+
+        # Header
+        header = Label(
+            text=f"{title}\nCalcul en cours...",
+            color=(1,1,1,1),
+            size_hint=(1,None),
+            height=dp(55)
+        )
+        content.add_widget(header)
+
+        # Onglets
+        tab_box = BoxLayout(orientation="horizontal", size_hint=(1,None), height=dp(38), spacing=dp(4))
+        from kivy.uix.togglebutton import ToggleButton as TB
+        tab_sol = TB(text="SOLUTIONS", group="v12tabs", state="down", size_hint=(0.5,1))
+        tab_saved = TB(text="COMBINAISONS", group="v12tabs", size_hint=(0.5,1))
+        tab_box.add_widget(tab_sol)
+        tab_box.add_widget(tab_saved)
+        content.add_widget(tab_box)
+
+        # Zone scrollable solutions
+        sv_sol = ScrollView()
+        grid_sol = GridLayout(cols=1, spacing=dp(3), size_hint_y=None)
+        grid_sol.bind(minimum_height=grid_sol.setter("height"))
+        sv_sol.add_widget(grid_sol)
+
+        # Zone scrollable combinaisons sauvegardees
+        sv_saved = ScrollView()
+        grid_saved = GridLayout(cols=1, spacing=dp(3), size_hint_y=None)
+        grid_saved.bind(minimum_height=grid_saved.setter("height"))
+        sv_saved.add_widget(grid_saved)
+
+        # Zone active (affiche l'un ou l'autre)
+        zone = BoxLayout(size_hint=(1,1))
+        zone.add_widget(sv_sol)
+        content.add_widget(zone)
+
+        def switch_tab(btn):
+            zone.clear_widgets()
+            if tab_sol.state == "down":
+                zone.add_widget(sv_sol)
+            else:
+                zone.add_widget(sv_saved)
+                refresh_saved()
+
+        tab_sol.bind(on_press=switch_tab)
+        tab_saved.bind(on_press=switch_tab)
+
+        # Boutons bas
+        btn_box = BoxLayout(orientation="horizontal", size_hint=(1,None), height=dp(42), spacing=dp(4))
+        close = Button(text="FERMER", size_hint=(0.5,1))
+        btn_save = Button(text="ENREGISTRER CETTE COMBO", size_hint=(0.5,1), background_color=(0.1,0.6,0.4,1))
+        btn_box.add_widget(close)
+        btn_box.add_widget(btn_save)
+        content.add_widget(btn_box)
+
+        pop = Popup(title=title, content=content, size_hint=(0.98,0.95))
+        self.register_solution_popup(pop)
+        close.bind(on_release=lambda x: pop.dismiss())
+
+        solutions_ref = []
+        current_sol_ref = [None]
+
+        def refresh_saved():
+            grid_saved.clear_widgets()
+            saved = read_json(SAVED_FILE, [])
+            if not saved:
+                grid_saved.add_widget(Label(
+                    text="Aucune combinaison enregistrée.",
+                    color=(0.7,0.7,0.7,1), size_hint_y=None, height=dp(50)
+                ))
+                return
+            for idx, item in enumerate(saved, 1):
+                fig_n = item.get("figure_nom", "?")
+                pos_str = item.get("positions_str", "")
+                m1,m2,m3,m4 = item.get("m1","?"),item.get("m2","?"),item.get("m3","?"),item.get("m4","?")
+                mode = item.get("mode","")
+                txt = f"{idx}. {fig_n} {pos_str} [{mode}]\n    M1={m1} M2={m2} M3={m3} M4={m4}"
+                row = BoxLayout(orientation="horizontal", size_hint_y=None, height=dp(54), spacing=dp(3))
+                b = Button(text=txt, font_size=dp(9.5), size_hint=(0.75,1), halign="left")
+                b_del = Button(text="✕", size_hint=(0.12,1), background_color=(0.7,0.1,0.1,1))
+                b_apply = Button(text="▶", size_hint=(0.13,1), background_color=(0.1,0.4,0.7,1))
+                def on_apply(btn, it=item):
+                    pop.dismiss()
+                    sol = {"m1":it["m1"],"m2":it["m2"],"m3":it["m3"],"m4":it["m4"],
+                           "figure":it.get("figure_bits","1111"),"positions":[],"secondary":""}
+                    self.apply_solution(sol)
+                def on_del(btn, it=item):
+                    sv = read_json(SAVED_FILE, [])
+                    sv = [x for x in sv if x != it]
+                    write_json(SAVED_FILE, sv)
+                    refresh_saved()
+                b.bind(on_release=on_apply)
+                b_apply.bind(on_release=on_apply)
+                b_del.bind(on_release=on_del)
+                row.add_widget(b); row.add_widget(b_apply); row.add_widget(b_del)
+                grid_saved.add_widget(row)
+
+        def on_save(_):
+            sol = current_sol_ref[0]
+            if sol is None:
+                # Sauvegarder la premiere solution
+                if solutions_ref:
+                    sol = solutions_ref[0]
+                else:
+                    return
+            saved = read_json(SAVED_FILE, [])
+            fig_bits = code_vers_bin(fig_code)
+            fig_nom = FIGURES[fig_code]["africain"]
+            all_p = sol.get("all_positions", [])
+            pos_str = "M" + "+M".join(str(p) for p in all_p)
+            mode = "S" if stricte else "NS"
+            entry = {
+                "figure_nom": fig_nom,
+                "figure_bits": fig_bits,
+                "positions_str": pos_str,
+                "mode": mode,
+                "m1": sol["m1"], "m2": sol["m2"],
+                "m3": sol["m3"], "m4": sol["m4"],
+            }
+            if entry not in saved:
+                saved.append(entry)
+                write_json(SAVED_FILE, saved)
+            self.message("Enregistré", f"{fig_nom} {pos_str} [{mode}]\nM1={sol['m1']} M2={sol['m2']} M3={sol['m3']} M4={sol['m4']}")
+
+        btn_save.bind(on_release=on_save)
+        pop.open()
+
+        def fill(dt):
+            try:
+                solutions = []
+                seen = set()
+                fig_bits = code_vers_bin(fig_code)
+
+                for m1 in TOUTES_LES_FIGURES:
+                    for m2 in TOUTES_LES_FIGURES:
+                        for m3 in TOUTES_LES_FIGURES:
+                            for m4 in TOUTES_LES_FIGURES:
+                                theme = developper_theme(m1, m2, m3, m4)
+                                # La figure doit apparaitre dans TOUTES les maisons choisies
+                                if not all(theme[p] == fig_bits for p in positions):
+                                    continue
+                                all_pos = [i for i in range(1, 17) if theme[i] == fig_bits]
+                                # Mode STRICTE : figure UNIQUEMENT dans les maisons demandees
+                                if stricte and all_pos != list(positions):
+                                    continue
+                                key = (m1, m2, m3, m4)
+                                if key in seen:
+                                    continue
+                                seen.add(key)
+                                solutions.append({
+                                    "m1": m1, "m2": m2, "m3": m3, "m4": m4,
+                                    "positions": list(positions),
+                                    "figure": fig_bits,
+                                    "secondary": "",
+                                    "all_positions": all_pos
+                                })
+
+                solutions_ref.clear()
+                solutions_ref.extend(solutions)
+
+                nb = len(solutions)
+                mode_lbl = "STRICTE" if stricte else "NON STRICTE"
+                header.text = f"{title}\n{nb} solution(s) — Mode {mode_lbl}"
+
+                if not solutions:
+                    grid_sol.add_widget(Label(
+                        text="Aucune solution trouvée.",
+                        color=(1,0.4,0.4,1), size_hint_y=None, height=dp(60)
+                    ))
+                    return
+
+                fig_name = FIGURES[fig_code]["africain"]
+
+                for idx, sol in enumerate(solutions, 1):
+                    all_p = sol["all_positions"]
+                    pos_cherchees = set(positions)
+                    pos_sup = [p for p in all_p if p not in pos_cherchees]
+
+                    # Ligne principale
+                    pos_ch_str = "M" + "+M".join(str(p) for p in positions)
+                    if stricte:
+                        pos_txt = pos_ch_str
+                    else:
+                        if pos_sup:
+                            pos_sup_str = "M" + "+M".join(str(p) for p in pos_sup)
+                            pos_txt = pos_ch_str + "  [+aussi: " + pos_sup_str + "]"
+                        else:
+                            pos_txt = pos_ch_str + "  [exacte]"
+
+                    txt = (f"{idx}. {fig_name} en {pos_txt}\n"
+                           f"    M1={sol['m1']} M2={sol['m2']} M3={sol['m3']} M4={sol['m4']}")
+
+                    # Couleur selon presence de positions supplementaires
+                    if not stricte and pos_sup:
+                        bg = (0.1, 0.35, 0.55, 1)  # bleu = positions supplementaires
+                    else:
+                        bg = (0.15, 0.15, 0.15, 1)  # gris = exact
+
+                    b = Button(
+                        text=txt,
+                        font_size=dp(10),
+                        size_hint_y=None,
+                        height=dp(56),
+                        halign="left",
+                        background_color=bg
+                    )
+
+                    def on_sol_click(btn, s=sol, sl=solutions):
+                        current_sol_ref[0] = s
+                        self.close_all_solution_popups()
+                        self.apply_solution_from_list(s, sl, None)
+
+                    b.bind(on_release=on_sol_click)
+                    grid_sol.add_widget(b)
+
+            except Exception as e:
+                header.text = "Erreur"
+                grid_sol.add_widget(Label(
+                    text=str(e), color=(1,0.5,0.5,1), size_hint_y=None, height=dp(80)
+                ))
+
+        Clock.schedule_once(fill, 0.2)
+
+    MoneyRoot.open_search_by_figure_window = open_search_by_figure_window_v12
+
+_geostar_v12_patch()
+
+
+
+# ============================================================
+# PATCH V12B - REDUCTION BINAIRE : MODE MANUEL + AUTO
+# ============================================================
+
+def _geostar_v12b_patch():
+
+    def points_vers_bit(n):
+        """Impair -> 1, Pair -> 2"""
+        return "1" if (n % 2 == 1) else "2"
+
+    def seize_points_vers_meres(points):
+        """
+        points = liste de 16 entiers (nombre de points par ligne)
+        Retourne 4 codes de meres (ex: '1221')
+        """
+        meres = []
+        for m in range(4):
+            bits = ""
+            for ligne in range(4):
+                bits += points_vers_bit(points[m * 4 + ligne])
+            meres.append(bits)
+        return meres
+
+    def popup_reduction_binaire(self):
+        """Popup principal : choix Manuel ou Automatique"""
+        box = BoxLayout(orientation="vertical", spacing=dp(10), padding=dp(12))
+        box.add_widget(Label(
+            text="[b]RÉDUCTION BINAIRE[/b]\nMéthode géomantique traditionnelle",
+            markup=True, color=(1,1,1,1),
+            size_hint=(1,None), height=dp(60),
+            halign="center"
+        ))
+
+        btn_auto = Button(
+            text="⚡ AUTOMATIQUE\nGénère 16 points aléatoires",
+            size_hint=(1,None), height=dp(65),
+            background_color=(0.1,0.55,0.35,1),
+            font_size=dp(14), halign="center"
+        )
+        btn_manuel = Button(
+            text="✏️ MANUEL\nTape tes propres points",
+            size_hint=(1,None), height=dp(65),
+            background_color=(0.15,0.4,0.7,1),
+            font_size=dp(14), halign="center"
+        )
+        btn_close = Button(text="ANNULER", size_hint=(1,None), height=dp(42))
+
+        box.add_widget(btn_auto)
+        box.add_widget(btn_manuel)
+        box.add_widget(btn_close)
+
+        pop = Popup(title="Réduction Binaire", content=box, size_hint=(0.9,0.55))
+
+        def do_auto(_):
+            pop.dismiss()
+            self.reduction_binaire_auto()
+
+        def do_manuel(_):
+            pop.dismiss()
+            self.reduction_binaire_manuel()
+
+        btn_auto.bind(on_release=do_auto)
+        btn_manuel.bind(on_release=do_manuel)
+        btn_close.bind(on_release=lambda x: pop.dismiss())
+        pop.open()
+
+    def reduction_binaire_auto(self):
+        """Génère 16 points aléatoires et calcule les 4 mères."""
+        points = [random.randint(1, 9) for _ in range(16)]
+        meres = seize_points_vers_meres(points)
+
+        # Afficher le résultat avant d'appliquer
+        box = BoxLayout(orientation="vertical", spacing=dp(6), padding=dp(10))
+
+        txt = "[b]Points générés :[/b]\n"
+        noms_meres = ["Mère 1", "Mère 2", "Mère 3", "Mère 4"]
+        for m in range(4):
+            lignes = points[m*4:(m+1)*4]
+            code = meres[m]
+            nom = FIGURES.get(code, {}).get("africain", "?")
+            occ = FIGURES.get(code, {}).get("occidental", "?")
+            pts_str = "  ".join(
+                ("•" * p + f" ({p}→{'1' if p%2==1 else '2'})") for p in lignes
+            )
+            txt += f"\n[b]{noms_meres[m]}[/b] → {code} = {nom} / {occ}\n{pts_str}\n"
+
+        sv = ScrollView()
+        lab = Label(
+            text=txt, markup=True, color=(1,1,1,1),
+            size_hint_y=None, halign="left", valign="top"
+        )
+        lab.bind(texture_size=lambda i,v: setattr(i,"height",v[1]))
+        lab.bind(width=lambda i,v: setattr(i,"text_size",(v,None)))
+        sv.add_widget(lab)
+        box.add_widget(sv)
+
+        btn_box = BoxLayout(orientation="horizontal", size_hint=(1,None), height=dp(44), spacing=dp(6))
+        btn_appliquer = Button(text="APPLIQUER", background_color=(0.1,0.6,0.3,1))
+        btn_regener = Button(text="REGÉNÉRER")
+        btn_annuler = Button(text="ANNULER")
+        btn_box.add_widget(btn_appliquer)
+        btn_box.add_widget(btn_regener)
+        btn_box.add_widget(btn_annuler)
+        box.add_widget(btn_box)
+
+        pop = Popup(title="Réduction Binaire — Auto", content=box, size_hint=(0.97,0.88))
+
+        def appliquer(_):
+            pop.dismiss()
+            self.mother_codes = meres
+            self.clear_active_solutions()
+            self.afficher_theme(developper_theme(*meres))
+
+        def regener(_):
+            pop.dismiss()
+            self.reduction_binaire_auto()
+
+        btn_appliquer.bind(on_release=appliquer)
+        btn_regener.bind(on_release=regener)
+        btn_annuler.bind(on_release=lambda x: pop.dismiss())
+        pop.open()
+
+    def reduction_binaire_manuel(self):
+        """Interface pour taper manuellement les 16 nombres de points."""
+        box = BoxLayout(orientation="vertical", spacing=dp(5), padding=dp(8))
+        box.add_widget(Label(
+            text="Tape le nombre de points pour chaque ligne\n(1 à 99, impair=1, pair=2)",
+            color=(0.9,0.9,0.9,1), size_hint=(1,None), height=dp(50),
+            halign="center"
+        ))
+
+        noms_meres = ["Mère 1", "Mère 2", "Mère 3", "Mère 4"]
+        inputs = []  # 16 TextInput
+
+        sv = ScrollView(size_hint=(1,1))
+        inner = BoxLayout(orientation="vertical", spacing=dp(6), size_hint_y=None)
+        inner.bind(minimum_height=inner.setter("height"))
+
+        for m in range(4):
+            inner.add_widget(Label(
+                text=f"[b]{noms_meres[m]}[/b]",
+                markup=True, color=(0.4,0.9,0.7,1),
+                size_hint=(1,None), height=dp(28)
+            ))
+            row = GridLayout(cols=4, spacing=dp(4), size_hint=(1,None), height=dp(52))
+            for ligne in range(4):
+                ti = TextInput(
+                    hint_text=f"L{m*4+ligne+1}",
+                    input_filter="int",
+                    multiline=False,
+                    font_size=dp(18),
+                    size_hint=(1,1)
+                )
+                inputs.append(ti)
+                row.add_widget(ti)
+            inner.add_widget(row)
+
+        sv.add_widget(inner)
+        box.add_widget(sv)
+
+        # Boutons rapides : +1 point, hasard ligne
+        quick_box = BoxLayout(orientation="horizontal", size_hint=(1,None), height=dp(40), spacing=dp(4))
+        btn_rnd_all = Button(text="Hasard tout", size_hint=(0.5,1), background_color=(0.3,0.3,0.5,1))
+        btn_clear = Button(text="Effacer tout", size_hint=(0.5,1), background_color=(0.4,0.2,0.2,1))
+        quick_box.add_widget(btn_rnd_all)
+        quick_box.add_widget(btn_clear)
+        box.add_widget(quick_box)
+
+        def rnd_all(_):
+            for ti in inputs:
+                ti.text = str(random.randint(1,9))
+
+        def clear_all(_):
+            for ti in inputs:
+                ti.text = ""
+
+        btn_rnd_all.bind(on_release=rnd_all)
+        btn_clear.bind(on_release=clear_all)
+
+        btn_box = BoxLayout(orientation="horizontal", size_hint=(1,None), height=dp(44), spacing=dp(4))
+        btn_ok = Button(text="CALCULER", background_color=(0.1,0.6,0.3,1))
+        btn_cancel = Button(text="ANNULER")
+        btn_box.add_widget(btn_ok)
+        btn_box.add_widget(btn_cancel)
+        box.add_widget(btn_box)
+
+        pop = Popup(title="Réduction Binaire — Manuel", content=box, size_hint=(0.97,0.93))
+
+        def calculer(_):
+            try:
+                vals = []
+                for ti in inputs:
+                    v = ti.text.strip()
+                    if not v:
+                        self.message("Attention", "Remplis toutes les 16 cases.")
+                        return
+                    n = int(v)
+                    if n < 1:
+                        self.message("Attention", "Chaque valeur doit être >= 1.")
+                        return
+                    vals.append(n)
+                meres = seize_points_vers_meres(vals)
+                pop.dismiss()
+
+                # Afficher résumé
+                txt = "[b]Résultat de ta réduction :[/b]\n"
+                for m in range(4):
+                    lignes = vals[m*4:(m+1)*4]
+                    code = meres[m]
+                    nom = FIGURES.get(code, {}).get("africain", "?")
+                    occ = FIGURES.get(code, {}).get("occidental", "?")
+                    bits_str = "  ".join(f"{p}→{'1' if p%2==1 else '2'}" for p in lignes)
+                    txt += f"\n[b]{noms_meres[m]}[/b] = {code} ({nom} / {occ})\n{bits_str}\n"
+
+                res_box = BoxLayout(orientation="vertical", spacing=dp(6), padding=dp(8))
+                sv2 = ScrollView()
+                lab = Label(text=txt, markup=True, color=(1,1,1,1), size_hint_y=None, halign="left", valign="top")
+                lab.bind(texture_size=lambda i,v: setattr(i,"height",v[1]))
+                lab.bind(width=lambda i,v: setattr(i,"text_size",(v,None)))
+                sv2.add_widget(lab)
+                res_box.add_widget(sv2)
+
+                bb = BoxLayout(orientation="horizontal", size_hint=(1,None), height=dp(44), spacing=dp(4))
+                b_app = Button(text="APPLIQUER", background_color=(0.1,0.6,0.3,1))
+                b_ret = Button(text="RETOUR")
+                bb.add_widget(b_app); bb.add_widget(b_ret)
+                res_box.add_widget(bb)
+
+                pop2 = Popup(title="Résultat Réduction", content=res_box, size_hint=(0.97,0.85))
+
+                def appliquer2(_):
+                    pop2.dismiss()
+                    self.mother_codes = meres
+                    self.clear_active_solutions()
+                    self.afficher_theme(developper_theme(*meres))
+
+                def retour2(_):
+                    pop2.dismiss()
+                    self.reduction_binaire_manuel()
+
+                b_app.bind(on_release=appliquer2)
+                b_ret.bind(on_release=retour2)
+                pop2.open()
+
+            except Exception as e:
+                self.message("Erreur", str(e))
+
+        btn_ok.bind(on_release=calculer)
+        btn_cancel.bind(on_release=lambda x: pop.dismiss())
+        pop.open()
+
+    # Remplacer theme_hasard pour appeler la reduction binaire auto
+    def theme_hasard_v12b(self):
+        self.popup_reduction_binaire()
+
+    MoneyRoot.popup_reduction_binaire = popup_reduction_binaire
+    MoneyRoot.reduction_binaire_auto = reduction_binaire_auto
+    MoneyRoot.reduction_binaire_manuel = reduction_binaire_manuel
+    MoneyRoot.theme_hasard = theme_hasard_v12b
+
+_geostar_v12b_patch()
+
+
+# ============================================================
+# PATCH V12-FAVORIS — MARQUE VISUELLE ★ + NOMS ALLEMANDS
+# ============================================================
+# Ce patch ne touche PAS à la logique de génération de thèmes.
+# Il ajoute uniquement :
+# 1. Marque ★ dorée dans la liste FAVORIS sur le thème actuel.
+# 2. Noms allemands des 4 mères dans chaque entrée favori.
+# 3. Le bouton FAVORIS devient ★ FAV quand le thème est sauvé.
+# 4. TABLE des figures inclut les noms allemands.
+# ============================================================
+
+_NOMS_DE = {
+    "2222": "Volk",           "2221": "Trauer",
+    "2212": "Weiss",          "2211": "Grosses Glück",
+    "2122": "Rot",            "2121": "Gewinn",
+    "2112": "Vereinigung",    "2111": "Drachenkopf",
+    "1222": "Freude",         "1221": "Gefängnis",
+    "1212": "Verlust",        "1211": "Mädchen",
+    "1122": "Kleines Glück",  "1121": "Knabe",
+    "1112": "Drachenschwanz", "1111": "Weg",
+}
+
+def _patch_favoris_visuel():
+
+    # ---- FAVORIS avec ★ et noms allemands ----
+    def popup_notes_list_new(self):
+        # Calcul de la clé du thème actuellement affiché
+        try:
+            current_k = "-".join(self.mother_codes)
+        except Exception:
+            current_k = ""
+
+        box = BoxLayout(orientation="vertical", padding=dp(6), spacing=dp(6))
+        box.add_widget(Label(
+            text="FAVORIS — " + str(len(self.notes)) + " note(s)",
+            color=(1, 0.85, 0.1, 1), size_hint=(1, None), height=dp(36)
+        ))
+
+        sv = ScrollView()
+        grid = GridLayout(cols=1, spacing=dp(5), size_hint_y=None)
+        grid.bind(minimum_height=grid.setter("height"))
+        sv.add_widget(grid)
+
+        for idx, n in enumerate(self.notes):
+            meres = n.get("meres", ["", "", "", ""])
+            note_key = "-".join(meres) if len(meres) == 4 else ""
+            is_current = (note_key == current_k)
+
+            # Noms allemands
+            noms_de = " · ".join(_NOMS_DE.get(c, c) for c in meres)
+
+            star = "★  " if is_current else "    "
+            txt = (star + n.get("nom", "Sans nom") + "   " + n.get("date", "") +
+                   "\nM1=" + meres[0] + "  M2=" + meres[1] +
+                   "  M3=" + meres[2] + "  M4=" + meres[3] +
+                   "\n\U0001f1e9\U0001f1ea " + noms_de)
+
+            bg = (0.50, 0.36, 0.0, 1) if is_current else (0.18, 0.18, 0.18, 1)
+            fg = (1.0, 1.0, 0.80, 1) if is_current else (1.0, 1.0, 1.0, 1)
+
+            b = Button(text=txt, font_size=dp(10), size_hint_y=None,
+                       height=dp(78), halign="left",
+                       background_color=bg, color=fg)
+
+            def on_note_click(btn, note=n, i=idx):
+                pop.dismiss()
+                self.active_notes = list(self.notes)
+                self.active_note_index = i
+                self.load_note(note)
+
+            b.bind(on_release=on_note_click)
+            grid.add_widget(b)
+
+        box.add_widget(sv)
+        close = Button(text="FERMER", size_hint=(1, None), height=dp(44))
+        box.add_widget(close)
+        pop = Popup(title="FAVORIS", content=box, size_hint=(0.95, 0.92))
+        close.bind(on_release=lambda x: pop.dismiss())
+        pop.open()
+
+    MoneyRoot.popup_notes_list = popup_notes_list_new
+
+    # ---- TABLE avec noms allemands ----
+    def popup_table_new(self):
+        txt = ("Elements :\n"
+               "Feu rouge   : 1121 1222 1122 1212\n"
+               "Vent jaune  : 2111 2122 2112 2121\n"
+               "Eau bleu    : 1111 2222 1112 2212\n"
+               "Terre marron: 2211 1221 1211 2221\n\n")
+        for code, d in FIGURES.items():
+            bits = code_vers_bin(code)
+            nom_de = _NOMS_DE.get(code, "—")
+            elem = element_of_bits(bits)
+            txt += (d["africain"] + " / " + d["occidental"] +
+                    " / \U0001f1e9\U0001f1ea " + nom_de + "\n" +
+                    "Code : " + code + "  |  " + elem + "\n" +
+                    d["sens"] + "\n\n")
+        self.message("Table des 16 figures", txt)
+
+    MoneyRoot.popup_table = popup_table_new
+
+    # ---- Bouton FAVORIS devient ★ FAV quand thème sauvé ----
+    _orig_mettre_infos = MoneyRoot.mettre_infos
+
+    def mettre_infos_new(self):
+        _orig_mettre_infos(self)
+        btn = getattr(self, "_fav_btn", None)
+        if btn is None:
+            return
+        try:
+            ck = "-".join(self.mother_codes)
+            fav_keys = ["-".join(n.get("meres", [])) for n in self.notes]
+            if ck in fav_keys:
+                btn.text = "★ FAV"
+                btn.background_color = (0.75, 0.55, 0.0, 1)
+            else:
+                btn.text = "FAVORIS"
+                btn.background_color = (0.55, 0.35, 0.0, 1)
+        except Exception:
+            pass
+
+    MoneyRoot.mettre_infos = mettre_infos_new
+
+    # Stocker référence au bouton FAVORIS après construction UI
+    _orig_build_ui = MoneyRoot.build_ui
+
+    def build_ui_new(self):
+        _orig_build_ui(self)
+        self._fav_btn = None
+        self._loading_fav = False
+        for w in self.children:
+            if isinstance(w, Button) and "FAVORIS" in getattr(w, "text", ""):
+                self._fav_btn = w
+                break
+
+    MoneyRoot.build_ui = build_ui_new
+
+_patch_favoris_visuel()
+# ============================================================
+# MODULE LICENCE GEOSTAR — PHASE 1
+# ============================================================
+# Vérifie que l'utilisateur a un code d'activation valide
+# avant d'autoriser l'accès à l'application.
+#
+# Fonctionnement :
+# - Au 1er lancement : écran d'activation
+# - L'utilisateur entre son code GEO-XXXX
+# - L'app télécharge codes_geostar.json depuis GitHub
+# - Vérifie validité, expiration, blocage
+# - Si OK : sauvegarde locale, accès autorisé
+# - Si pas internet : grâce de 30 jours
+# ============================================================
+
+import json
+import os
+import re
+import urllib.request
+import urllib.error
+from datetime import datetime, timedelta
+
+# --- CONFIGURATION ---
+# IMPORTANT : ce lien doit pointer vers TON fichier codes_geostar.json sur GitHub
+# Format raw : https://raw.githubusercontent.com/USER/REPO/BRANCH/FICHIER
+GEOSTAR_LICENCE_URL = "https://raw.githubusercontent.com/Moneymyck/geostar-android/main/codes_geostar.json"
+
+# Délai de grâce hors ligne (jours) — au-delà, l'app redemande activation
+GEOSTAR_GRACE_DAYS = 30
+
+# Regex pour valider le format d'un code (GEO- suivi de 4 caractères alphanumériques)
+GEOSTAR_CODE_REGEX = re.compile(r"^GEO-[A-Z0-9]{4}$")
+
+# --- FICHIER LOCAL DE STATUT ---
+def _geostar_licence_path():
+    """Chemin du fichier où on stocke le statut local."""
+    if platform == "android":
+        try:
+            from android.storage import app_storage_path
+            base = app_storage_path()
+        except Exception:
+            base = os.path.expanduser("~")
+    else:
+        base = os.path.expanduser("~")
+    return os.path.join(base, ".geostar_licence.json")
+
+
+def _geostar_licence_load():
+    """Charge le statut local : { code, expire, derniere_verif }."""
+    try:
+        with open(_geostar_licence_path(), "r", encoding="utf-8") as f:
+            return json.load(f)
+    except Exception:
+        return None
+
+
+def _geostar_licence_save(data):
+    """Sauvegarde le statut local."""
+    try:
+        with open(_geostar_licence_path(), "w", encoding="utf-8") as f:
+            json.dump(data, f, ensure_ascii=False, indent=2)
+        return True
+    except Exception:
+        return False
+
+
+def _geostar_fetch_remote_codes():
+    """Télécharge la liste des codes depuis GitHub.
+    Retourne le dict, ou None si problème réseau."""
+    try:
+        req = urllib.request.Request(
+            GEOSTAR_LICENCE_URL,
+            headers={"User-Agent": "GEOSTAR-App/12.25"}
+        )
+        with urllib.request.urlopen(req, timeout=10) as resp:
+            data = resp.read().decode("utf-8")
+            return json.loads(data)
+    except Exception:
+        return None
+
+
+def _geostar_check_code_online(code):
+    """Vérifie un code en ligne.
+    Retourne : (ok: bool, message: str, expire: str or None)"""
+    remote = _geostar_fetch_remote_codes()
+    if remote is None:
+        return (False, "Pas d'internet — vérification impossible", None)
+
+    bloques = remote.get("codes_bloques", [])
+    if code in bloques:
+        return (False, "Ce code a été bloqué. Contactez l'administrateur.", None)
+
+    valides = remote.get("codes_valides", {})
+    if code not in valides:
+        return (False, "Code inconnu ou invalide.", None)
+
+    info = valides[code]
+    expire_str = info.get("expire", "")
+    if expire_str:
+        try:
+            expire_date = datetime.strptime(expire_str, "%Y-%m-%d")
+            if datetime.now() > expire_date:
+                return (False, f"Ce code a expiré le {expire_str}.", expire_str)
+        except Exception:
+            pass
+
+    return (True, "Activation réussie !", expire_str)
+
+
+def _geostar_verify_at_startup():
+    """Au démarrage : vérifie le statut local + tente une re-vérif en ligne.
+    Retourne (autoriser: bool, message: str)"""
+    local = _geostar_licence_load()
+
+    if not local:
+        # Première utilisation : on demande activation
+        return (False, "first_run")
+
+    code = local.get("code", "")
+    if not code or not GEOSTAR_CODE_REGEX.match(code):
+        return (False, "first_run")
+
+    # Tenter re-vérif en ligne
+    remote = _geostar_fetch_remote_codes()
+    if remote is not None:
+        # Internet disponible : vérification stricte
+        bloques = remote.get("codes_bloques", [])
+        if code in bloques:
+            # Effacer le statut local pour forcer re-activation
+            try:
+                os.remove(_geostar_licence_path())
+            except Exception:
+                pass
+            return (False, "Votre code a été bloqué. Contactez l'administrateur.")
+
+        valides = remote.get("codes_valides", {})
+        if code not in valides:
+            try:
+                os.remove(_geostar_licence_path())
+            except Exception:
+                pass
+            return (False, "Votre code n'est plus valide.")
+
+        info = valides[code]
+        expire_str = info.get("expire", "")
+        if expire_str:
+            try:
+                expire_date = datetime.strptime(expire_str, "%Y-%m-%d")
+                if datetime.now() > expire_date:
+                    return (False, f"Votre licence a expiré le {expire_str}.")
+            except Exception:
+                pass
+
+        # Tout est bon : mettre à jour la dernière vérif
+        local["derniere_verif"] = datetime.now().strftime("%Y-%m-%d")
+        local["expire"] = expire_str
+        _geostar_licence_save(local)
+        return (True, "")
+
+    # Pas d'internet : on accepte si dernière vérif < 30 jours
+    derniere = local.get("derniere_verif", "")
+    if derniere:
+        try:
+            d = datetime.strptime(derniere, "%Y-%m-%d")
+            delta = (datetime.now() - d).days
+            if delta <= GEOSTAR_GRACE_DAYS:
+                return (True, "")
+            else:
+                return (False, f"Connexion internet requise (dernière vérif il y a {delta} jours).")
+        except Exception:
+            pass
+
+    return (False, "Connexion internet requise pour vérifier votre licence.")
+
+
+# ============================================================
+# ÉCRAN D'ACTIVATION (popup au démarrage)
+# ============================================================
+
+def _geostar_show_activation_screen(app_root):
+    """Affiche l'écran d'activation. app_root = instance MoneyRoot."""
+
+    box = BoxLayout(orientation="vertical", padding=dp(20), spacing=dp(12))
+
+    title = Label(
+        text="[b]ACTIVATION GEOSTAR[/b]",
+        markup=True,
+        color=(1, 0.85, 0.1, 1),
+        font_size=dp(20),
+        size_hint=(1, None),
+        height=dp(40)
+    )
+    box.add_widget(title)
+
+    instructions = Label(
+        text=("Entrez votre code d'activation\n"
+              "Format : GEO-XXXX\n\n"
+              "(reçu de l'administrateur)"),
+        color=(1, 1, 1, 1),
+        size_hint=(1, None),
+        height=dp(90),
+        halign="center"
+    )
+    instructions.bind(width=lambda s, w: setattr(s, "text_size", (w, None)))
+    box.add_widget(instructions)
+
+    code_input = TextInput(
+        hint_text="GEO-XXXX",
+        multiline=False,
+        size_hint=(1, None),
+        height=dp(50),
+        font_size=dp(18),
+        halign="center"
+    )
+    box.add_widget(code_input)
+
+    status_label = Label(
+        text="",
+        color=(1, 0.3, 0.3, 1),
+        size_hint=(1, None),
+        height=dp(60),
+        halign="center"
+    )
+    status_label.bind(width=lambda s, w: setattr(s, "text_size", (w, None)))
+    box.add_widget(status_label)
+
+    btn_activer = Button(
+        text="ACTIVER",
+        size_hint=(1, None),
+        height=dp(55),
+        background_color=(0.1, 0.6, 0.3, 1),
+        bold=True,
+        font_size=dp(16)
+    )
+    box.add_widget(btn_activer)
+
+    btn_quitter = Button(
+        text="Quitter l'application",
+        size_hint=(1, None),
+        height=dp(40),
+        background_color=(0.4, 0.4, 0.4, 1)
+    )
+    box.add_widget(btn_quitter)
+
+    pop = Popup(
+        title="GEOSTAR — Activation requise",
+        content=box,
+        size_hint=(0.95, 0.85),
+        auto_dismiss=False
+    )
+
+    def do_activate(_):
+        code = code_input.text.strip().upper()
+        if not code:
+            status_label.text = "Veuillez entrer un code."
+            return
+        # Normalisation : ajouter GEO- si l'utilisateur l'a oublié
+        if not code.startswith("GEO-") and len(code) == 4:
+            code = "GEO-" + code
+        if not GEOSTAR_CODE_REGEX.match(code):
+            status_label.text = "Format invalide. Exemple : GEO-A7K9"
+            return
+
+        status_label.text = "Vérification en cours..."
+        status_label.color = (1, 1, 0.3, 1)
+
+        # Vérification en ligne
+        ok, msg, expire = _geostar_check_code_online(code)
+        if ok:
+            # Sauvegarder
+            _geostar_licence_save({
+                "code": code,
+                "expire": expire or "",
+                "derniere_verif": datetime.now().strftime("%Y-%m-%d"),
+                "active_le": datetime.now().strftime("%Y-%m-%d")
+            })
+            pop.dismiss()
+            # Lancer l'app
+            if hasattr(app_root, "_geostar_after_activation"):
+                app_root._geostar_after_activation()
+        else:
+            status_label.text = msg
+            status_label.color = (1, 0.3, 0.3, 1)
+
+    def do_quit(_):
+        from kivy.app import App
+        App.get_running_app().stop()
+
+    btn_activer.bind(on_release=do_activate)
+    btn_quitter.bind(on_release=do_quit)
+    pop.open()
+
+
+def _geostar_show_blocked_screen(message):
+    """Écran de blocage si la licence est invalide / expirée."""
+    box = BoxLayout(orientation="vertical", padding=dp(20), spacing=dp(15))
+
+    box.add_widget(Label(
+        text="[b]ACCÈS REFUSÉ[/b]",
+        markup=True,
+        color=(1, 0.3, 0.3, 1),
+        font_size=dp(22),
+        size_hint=(1, None),
+        height=dp(45)
+    ))
+
+    msg_label = Label(
+        text=message,
+        color=(1, 1, 1, 1),
+        size_hint=(1, 0.6),
+        halign="center",
+        valign="middle"
+    )
+    msg_label.bind(width=lambda s, w: setattr(s, "text_size", (w, None)))
+    box.add_widget(msg_label)
+
+    btn_reactiver = Button(
+        text="Entrer un nouveau code",
+        size_hint=(1, None),
+        height=dp(55),
+        background_color=(0.55, 0.40, 0.0, 1)
+    )
+    btn_quitter = Button(
+        text="Quitter",
+        size_hint=(1, None),
+        height=dp(45),
+        background_color=(0.4, 0.4, 0.4, 1)
+    )
+
+    box.add_widget(btn_reactiver)
+    box.add_widget(btn_quitter)
+
+    pop = Popup(
+        title="GEOSTAR — Licence invalide",
+        content=box,
+        size_hint=(0.95, 0.7),
+        auto_dismiss=False
+    )
+
+    def do_reactivate(_):
+        # Effacer le statut local et réafficher l'écran d'activation
+        try:
+            os.remove(_geostar_licence_path())
+        except Exception:
+            pass
+        pop.dismiss()
+        # On a besoin de la référence MoneyRoot ; on la trouve via App
+        from kivy.app import App
+        root = App.get_running_app().root
+        _geostar_show_activation_screen(root)
+
+    def do_quit(_):
+        from kivy.app import App
+        App.get_running_app().stop()
+
+    btn_reactiver.bind(on_release=do_reactivate)
+    btn_quitter.bind(on_release=do_quit)
+    pop.open()
+
+
+# ============================================================
+# HOOK D'ACTIVATION AU DÉMARRAGE
+# ============================================================
+
+def _geostar_licence_startup_check():
+    """Appelé au démarrage de l'app. Bloque ou autorise."""
+    autoriser, message = _geostar_verify_at_startup()
+
+    if autoriser:
+        return  # Tout va bien, l'app démarre normalement
+
+    from kivy.app import App
+    root = App.get_running_app().root
+
+    if message == "first_run":
+        # Première utilisation : écran d'activation
+        _geostar_show_activation_screen(root)
+    else:
+        # Code bloqué / expiré / pas d'internet trop longtemps
+        _geostar_show_blocked_screen(message)
+
+
+# Injecter le hook dans MoneyRoot.build_ui
+_geostar_orig_build_ui = MoneyRoot.build_ui
+
+def _build_ui_with_licence(self):
+    _geostar_orig_build_ui(self)
+    # Hook qui sera appelé après activation
+    def _after_activation():
+        pass  # Rien de spécial : l'UI est déjà construite
+    self._geostar_after_activation = _after_activation
+    # Lancer la vérification après un court délai (laisse l'UI se construire)
+    Clock.schedule_once(lambda dt: _geostar_licence_startup_check(), 0.3)
+
+MoneyRoot.build_ui = _build_ui_with_licence
+
+
+# ============================================================
+# PATCH V12-FIX-SOLUTIONS-V2 — Fermeture forcée de TOUS les popups
+# ============================================================
+# Quand on clique sur une solution dans n'importe quel menu,
+# toutes les fenêtres popup doivent se fermer pour laisser
+# voir le thème en arrière-plan.
+# ============================================================
+
+def _geostar_v2_close_every_popup():
+    """Ferme TOUS les popups actuellement ouverts dans Kivy."""
+    try:
+        from kivy.uix.popup import Popup
+        from kivy.uix.modalview import ModalView
+        from kivy.core.window import Window
+
+        popups_a_fermer = []
+        for w in list(Window.children):
+            if isinstance(w, (Popup, ModalView)):
+                popups_a_fermer.append(w)
+
+        for p in popups_a_fermer:
+            try:
+                p.dismiss()
+            except Exception:
+                pass
+    except Exception:
+        pass
+
+
+def _geostar_v2_patch_apply():
+    """Force la fermeture de tous les popups quand une solution est appliquée."""
+
+    _old_apply_solution = MoneyRoot.apply_solution
+    _old_apply_from_list = MoneyRoot.apply_solution_from_list
+
+    def apply_solution_v2(self, sol):
+        # Fermer immédiatement tous les popups
+        _geostar_v2_close_every_popup()
+        # Quitter le mode favoris
+        self.active_notes = []
+        self.active_note_index = -1
+        # Programmer une fermeture après affichage du thème
+        Clock.schedule_once(lambda dt: _geostar_v2_close_every_popup(), 0.05)
+        # Appeler la version originale
+        _old_apply_solution(self, sol)
+        # Sécurité supplémentaire
+        Clock.schedule_once(lambda dt: _geostar_v2_close_every_popup(), 0.15)
+
+    def apply_from_list_v2(self, sol, sol_list, pop=None):
+        _geostar_v2_close_every_popup()
+        self.active_solutions = sol_list
+        try:
+            self.active_solution_index = sol_list.index(sol)
+        except ValueError:
+            self.active_solution_index = 0
+        self.active_notes = []
+        self.active_note_index = -1
+        self.apply_solution(sol)
+
+    MoneyRoot.apply_solution = apply_solution_v2
+    MoneyRoot.apply_solution_from_list = apply_from_list_v2
+    MoneyRoot.apply_solution_from_list_v105 = apply_from_list_v2
+    MoneyRoot.apply_solution_from_list_v1093 = apply_from_list_v2
+
+_geostar_v2_patch_apply()

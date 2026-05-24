@@ -1,83 +1,27 @@
 [app]
-
-# (str) Title of your application
-title = GEOSTAR
-
-# (str) Package name
-package.name = geostar
-
-# (str) Package domain (needed for android/ios packaging)
+title = GEOSTAR Admin
+package.name = geostaradmin
 package.domain = org.geostar
-
-# (str) Source code where the main.py live
 source.dir = .
-
-# (list) Source files to include
 source.include_exts = py,png,jpg,kv,atlas,json,ttf
-
-# (list) Source files to exclude
 source.exclude_exts = spec,md,txt
-
-# (list) List of directory to exclude
-source.exclude_dirs = tests, bin, venv, .venv, .git, .github, __pycache__, .buildozer
-
-# (str) Application versioning
-version = 12.25
-
-# (list) Application requirements
-# p4a v2024.01.21 utilise Python 3.11 par defaut, compatible Kivy 2.3.0
-requirements = python3,kivy==2.3.0,pillow,certifi,pyjnius,android
-
-# (str) Supported orientation
+source.exclude_dirs = tests,bin,venv,.venv,.git,.github,__pycache__,.buildozer
+version = 1.0
+requirements = python3,kivy==2.3.0,pillow,certifi,android
 orientation = portrait
-
-# (bool) Fullscreen
 fullscreen = 0
-
-# (list) Permissions
-android.permissions = INTERNET,WRITE_EXTERNAL_STORAGE,READ_EXTERNAL_STORAGE,RECORD_AUDIO,VIBRATE
-
-# (int) Target Android API
+android.permissions = INTERNET,WRITE_EXTERNAL_STORAGE,READ_EXTERNAL_STORAGE,VIBRATE
 android.api = 33
-
-# (int) Minimum API
 android.minapi = 21
-
-# (int) Android NDK API
 android.ndk_api = 21
-
-# (bool) auto-accept SDK license
 android.accept_sdk_license = True
-
-# (list) The Android archs to build for
 android.archs = arm64-v8a, armeabi-v7a
-
-# (bool) auto backup
 android.allow_backup = True
-
-# (str) release format
 android.release_artifact = apk
-
-# (str) debug format
 android.debug_artifact = apk
-
-#
-# Python for android (p4a) - VERSION CRITIQUE
-#
-
-# IMPORTANT : tag v2024.01.21 (avec le "v" prefix obligatoire)
-# Cette release p4a utilise Python 3.11, compatible avec Kivy 2.3.0
-# La branche master utilise Python 3.14 qui CASSE Kivy 2.3.0
 p4a.branch = v2024.01.21
-
-# (str) Bootstrap
 p4a.bootstrap = sdl2
 
-
 [buildozer]
-
-# (int) Log level
 log_level = 2
-
-# (int) Warn on root
 warn_on_root = 1

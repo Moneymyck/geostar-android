@@ -1,17 +1,5 @@
 {
-  "codes_valides": {
-    "GEO-NSQC": {
-      "expire": "2026-06-24",
-      "nom": "",
-      "telephone": "",
-      "email": "",
-      "notes": "",
-      "tarif": "1 mois",
-      "prix": 5.0,
-      "cree_le": "2026-05-25",
-      "cree_par": "5500"
-    }
-  },
+  "codes_valides": {},
   "codes_bloques": [],
   "derniere_maj": "2026-05-25"
 }

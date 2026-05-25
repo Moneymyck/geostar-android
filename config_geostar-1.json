@@ -1,0 +1,10 @@
+{
+  "app_name": "GEOSTAR",
+  "contact_email": "anthom1253@gmail.com",
+  "message_accueil": "Bienvenue dans GEOSTAR",
+  "comm_enabled": true,
+  "notes_valides_enabled": true,
+  "maintenance": false,
+  "maintenance_message": "Application en maintenance.",
+  "version_message": ""
+}

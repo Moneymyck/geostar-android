@@ -1,5 +1,17 @@
 {
-  "codes_valides": {},
+  "codes_valides": {
+    "GEO-GBAS": {
+      "expire": "2026-06-24",
+      "nom": "amadou",
+      "telephone": "0678904578",
+      "email": "hari@gmail.com",
+      "notes": "payer",
+      "tarif": "1 mois",
+      "prix": 5.0,
+      "cree_le": "2026-05-25",
+      "cree_par": "5500"
+    }
+  },
   "codes_bloques": [],
   "derniere_maj": "2026-05-25"
 }

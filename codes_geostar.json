@@ -3,6 +3,11 @@
     "GEO-UG9A": {
       "client": "Débloqué",
       "expire": "2099-12-31"
+    },
+    "GEO-YC7D": {
+      "client": "Client",
+      "expire": "2026-06-27",
+      "created_at": "2026-05-28 19:53"
     }
   },
   "codes_bloques": [],

@@ -1,16 +1,13 @@
 {
   "codes_valides": {
-    "GEO-YC7D": {
-      "client": "Débloqué",
-      "expire": "2099-12-31"
-    },
     "GEO-LFIW": {
       "client": "Débloqué",
       "expire": "2099-12-31"
     }
   },
   "codes_bloques": [
-    "GEO-UG9A"
+    "GEO-UG9A",
+    "GEO-YC7D"
   ],
   "derniere_maj": "2026-05-26"
 }

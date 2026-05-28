@@ -9,6 +9,11 @@
       "client": "Client",
       "expire": "2026-05-28",
       "created_at": "2026-05-28 21:48"
+    },
+    "GEO-TXCZ": {
+      "client": "Client",
+      "expire": "2029-02-21",
+      "created_at": "2026-05-28 21:48"
     }
   },
   "codes_bloques": [],

@@ -1,9 +1,5 @@
 {
   "codes_valides": {
-    "GEO-UG9A": {
-      "client": "Débloqué",
-      "expire": "2101-02-13"
-    },
     "GEO-YC7D": {
       "client": "Débloqué",
       "expire": "2099-12-31"
@@ -13,6 +9,8 @@
       "expire": "2099-12-31"
     }
   },
-  "codes_bloques": [],
+  "codes_bloques": [
+    "GEO-UG9A"
+  ],
   "derniere_maj": "2026-05-26"
 }

@@ -49,7 +49,7 @@ fullscreen = 0
 
 # (list) Permissions
 # Permissions utilisées par l'application (notes, micro, stockage)
-android.permissions = INTERNET,WRITE_EXTERNAL_STORAGE,READ_EXTERNAL_STORAGE,RECORD_AUDIO,VIBRATE
+android.permissions = INTERNET,RECORD_AUDIO,READ_EXTERNAL_STORAGE,WRITE_EXTERNAL_STORAGE,VIBRATE
 
 # (int) Target Android API, should be as high as possible.
 # 34 = Android 14 (exigence Play Store août 2024+)

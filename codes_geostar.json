@@ -1,14 +1,9 @@
 {
-  "codes_valides": {
-    "GEO-LFIW": {
-      "client": "Client",
-      "expire": "2027-10-24",
-      "created_at": "2026-05-28 19:53"
-    }
-  },
+  "codes_valides": {},
   "codes_bloques": [
     "GEO-UG9A",
-    "GEO-YC7D"
+    "GEO-YC7D",
+    "GEO-LFIW"
   ],
   "derniere_maj": "2026-05-26"
 }
